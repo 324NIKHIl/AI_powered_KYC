@@ -1,0 +1,127 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Global base styles ─────────────────────────────────────────────────── */
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    @apply bg-surface-900 text-white font-sans;
+    min-height: 100vh;
+    background-image:
+      radial-gradient(ellipse 80% 80% at 50% -20%, rgba(0,212,255,0.08), transparent),
+      radial-gradient(ellipse 60% 60% at 80% 80%, rgba(124,58,237,0.06), transparent);
+  }
+
+  ::-webkit-scrollbar         { width: 6px; }
+  ::-webkit-scrollbar-track   { @apply bg-surface-800; }
+  ::-webkit-scrollbar-thumb   { @apply bg-surface-500 rounded-full; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-primary; }
+}
+
+/* ── Utility components ─────────────────────────────────────────────────── */
+@layer components {
+  /* Glassmorphism card */
+  .glass-card {
+    @apply bg-surface-800/60 backdrop-blur-md border border-white/10 rounded-2xl;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.05);
+  }
+
+  /* Neon border highlight */
+  .glow-border {
+    @apply border border-primary/40;
+    box-shadow: 0 0 15px rgba(0,212,255,0.15), inset 0 0 15px rgba(0,212,255,0.05);
+  }
+
+  /* Primary CTA button */
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl
+           bg-gradient-to-r from-primary to-primary-dark text-surface-900 font-semibold
+           transition-all duration-200 hover:shadow-glow hover:scale-[1.02]
+           disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100;
+  }
+
+  /* Secondary outlined button */
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl
+           border border-primary/40 text-primary font-semibold
+           transition-all duration-200 hover:bg-primary/10 hover:border-primary
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  /* Status badge */
+  .badge-approved { @apply px-3 py-1 rounded-full text-xs font-bold bg-success/20 text-success border border-success/30; }
+  .badge-rejected { @apply px-3 py-1 rounded-full text-xs font-bold bg-danger/20  text-danger  border border-danger/30;  }
+  .badge-pending  { @apply px-3 py-1 rounded-full text-xs font-bold bg-warning/20 text-warning  border border-warning/30; }
+
+  /* Input field */
+  .input-field {
+    @apply w-full px-4 py-3 rounded-xl bg-surface-700 border border-white/10 text-white
+           placeholder-white/30 focus:outline-none focus:border-primary/60 focus:ring-1
+           focus:ring-primary/30 transition-all duration-200;
+  }
+
+  /* Section heading */
+  .section-title {
+    @apply text-2xl font-bold text-white;
+  }
+
+  /* Gradient text */
+  .gradient-text {
+    @apply bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent;
+  }
+}
+
+/* ── Custom animations ──────────────────────────────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+
+.shimmer {
+  background: linear-gradient(90deg, transparent 0%, rgba(0,212,255,0.08) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: shimmer 2s infinite;
+}
+
+@keyframes scanline {
+  0%   { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
+
+.scanline {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(0,212,255,0.3), transparent);
+  animation: scanline 8s linear infinite;
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ── Webcam container ───────────────────────────────────────────────────── */
+.webcam-container {
+  position: relative;
+  overflow: hidden;
+  border-radius: 1rem;
+}
+
+.webcam-container::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 2px solid rgba(0,212,255,0.4);
+  border-radius: 1rem;
+  pointer-events: none;
+  z-index: 10;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+/* ── Drop zone ──────────────────────────────────────────────────────────── */
+.drop-zone-active {
+  @apply border-primary bg-primary/5;
+  box-shadow: 0 0 30px rgba(0,212,255,0.2);
+}

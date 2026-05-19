@@ -1,0 +1,38 @@
+# ── Web Framework ─────────────────────────────────────────────────────────────
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+python-multipart==0.0.9
+aiofiles==23.2.1
+
+# ── Database ──────────────────────────────────────────────────────────────────
+motor==3.4.0
+pymongo==4.7.1
+
+# ── Configuration ─────────────────────────────────────────────────────────────
+python-dotenv==1.0.1
+pydantic==2.7.1
+pydantic-settings==2.2.1
+
+# ── Image Processing ──────────────────────────────────────────────────────────
+opencv-python==4.9.0.80
+Pillow==10.3.0
+numpy==1.26.4
+pdf2image==1.17.0
+
+# ── OCR ───────────────────────────────────────────────────────────────────────
+easyocr==1.7.1
+
+# ── Face Detection & Verification ─────────────────────────────────────────────
+deepface==0.0.92
+mtcnn==0.1.1
+# tensorflow is pulled in by deepface — use the macOS ARM64 wheel
+tensorflow==2.16.1
+tf-keras==2.16.0
+
+# ── ML Utilities ─────────────────────────────────────────────────────────────
+scikit-learn==1.4.2
+scipy==1.13.0
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+httpx==0.27.0
+python-jose[cryptography]==3.3.0
