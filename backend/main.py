@@ -4,6 +4,14 @@ Phase 1: Document OCR + Face Verification
 """
 
 import os
+
+# Must run before anything imports TensorFlow (MTCNN does, at first document
+# upload). With TF >= 2.16, tf.keras is Keras 3 unless this is set, and
+# DeepFace's ArcFace/FaceNet builders only work with Keras 2 (the tf-keras
+# package) — otherwise model loading fails with
+# "'KerasHistory' object has no attribute 'layer'".
+os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
+
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
