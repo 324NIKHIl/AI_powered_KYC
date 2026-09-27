@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useVerification } from '../context/VerificationContext'
-import { uploadDocument, verifyFace } from '../services/api'
+import { uploadAadhaarQr, uploadDocument, verifyFace } from '../services/api'
+import AadhaarQrPanel from '../components/AadhaarQrPanel'
 import ProgressSteps from '../components/ProgressSteps'
 import DocumentUpload from '../components/DocumentUpload'
 import WebcamCapture from '../components/WebcamCapture'
@@ -38,6 +39,12 @@ export default function VerificationPage() {
     } finally {
       setUploading(false)
     }
+  }
+
+  // ── Step 2 (optional): Aadhaar QR side ──────────────────────────────────
+  async function handleQrUpload(file) {
+    const result = await uploadAadhaarQr(state.sessionId, file)
+    dispatch({ type: 'QR_SUCCESS', payload: result })
   }
 
   // ── Step 3 → 5: Face verify ─────────────────────────────────────────────
@@ -167,6 +174,10 @@ export default function VerificationPage() {
                 Next: Live Face Capture →
               </button>
             </div>
+
+            {(state.documentResult.document_type === 'aadhaar' || state.documentResult.aadhaar_qr) && (
+              <AadhaarQrPanel qr={state.documentResult.aadhaar_qr} onUpload={handleQrUpload} />
+            )}
           </motion.div>
         )}
 

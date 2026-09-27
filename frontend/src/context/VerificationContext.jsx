@@ -32,6 +32,12 @@ function reducer(state, action) {
         documentResult: action.payload,
         step:           2,
       }
+    case 'QR_SUCCESS':
+      return {
+        ...state,
+        error:          null,
+        documentResult: { ...state.documentResult, aadhaar_qr: action.payload },
+      }
     case 'FACE_SUCCESS':
       console.log('[FACE_SUCCESS STATE]', {
         sessionId: action.payload.session_id,

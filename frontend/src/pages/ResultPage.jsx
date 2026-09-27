@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { useVerification } from '../context/VerificationContext'
 import { getVerificationDetail } from '../services/api'
+import AadhaarQrPanel from '../components/AadhaarQrPanel'
 import ConfidenceMeter from '../components/ConfidenceMeter'
 import StatusBadge from '../components/StatusBadge'
 
@@ -151,6 +152,18 @@ export default function ResultPage() {
             </div>
           </motion.div>
         </div>
+
+        {/* ── Aadhaar Secure QR ───────────────────────────────────────────── */}
+        {record.aadhaar_qr && (
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }}>
+            <AadhaarQrPanel
+              qr={record.aadhaar_qr}
+              qrFaceSimilarity={record.qr_face_similarity}
+              documentQrFaceSimilarity={record.document_qr_face_similarity}
+              tamperFlags={record.tamper_flags}
+            />
+          </motion.div>
+        )}
 
         {/* ── Actions ──────────────────────────────────────────────────────── */}
         <div className="flex flex-col sm:flex-row gap-4 justify-center">

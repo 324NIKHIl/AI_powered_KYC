@@ -12,10 +12,17 @@ from typing import Optional
 
 from models.verification import (
     FaceVerifyResponse,
+    QrSignatureStatus,
     RejectionReason,
     VerificationStatus,
 )
-from services.face_service import check_liveness, verify_faces
+from services.face_service import (
+    SIMILARITY_THRESHOLD,
+    check_liveness,
+    cosine_similarity,
+    reference_embedding,
+    verify_faces,
+)
 from database.mongodb import sessions_col, verifications_col
 from utils.image_processing import base64_to_numpy, save_image
 
@@ -42,6 +49,17 @@ async def create_session(session_id: str, extra: dict) -> None:
         {"session_id": session_id},
         {"$set": {**extra, "session_id": session_id, "created_at": datetime.now(timezone.utc)}},
         upsert=True,
+    )
+
+
+async def update_session(session_id: str, updates: dict) -> None:
+    await sessions_col().update_one({"session_id": session_id}, {"$set": updates})
+
+
+async def upsert_verification_fields(session_id: str, updates: dict) -> None:
+    await verifications_col().update_one(
+        {"session_id": session_id},
+        {"$set": {**updates, "updated_at": datetime.now(timezone.utc)}},
     )
 
 
@@ -119,13 +137,23 @@ async def run_face_verification(
             session_id, liveness_from_frontend, server_live
         )
 
-    if not doc_face_path:
+    # ── Aadhaar Secure QR (optional) ──────────────────────────────────────────
+    # The photo inside the QR is only trusted when its signature verified, or
+    # when it couldn't be checked for lack of a certificate (still decoded QR data).
+    qr: dict = session.get("aadhaar_qr") or {}
+    qr_photo_path: Optional[str] = None
+    if qr.get("signature_status") in (QrSignatureStatus.VERIFIED.value, QrSignatureStatus.UNVERIFIED.value):
+        qr_photo_path = qr.get("photo_path")
+
+    # Printed photo is the primary reference; the QR photo stands in if none was found
+    reference_path = doc_face_path or qr_photo_path
+    if not reference_path:
         logger.warning("[%s] No document face path in session", session_id)
         await _save_rejected_record(session_id, session, 0.0, liveness_ok, RejectionReason.NO_FACE_FOUND)
         return _rejected_response(session_id, RejectionReason.NO_FACE_FOUND, liveness=liveness_ok)
 
     # ── Face detection, alignment and comparison ──────────────────────────────
-    match = verify_faces(doc_face_path, live_img)
+    match = verify_faces(reference_path, live_img)
     face_match, similarity = match.verified, match.similarity
     logger.info(
         "[%s] Face match=%s similarity=%.4f reason=%s",
@@ -143,9 +171,16 @@ async def run_face_verification(
         pair_path = save_image(match.aligned_pair, "uploads/faces", prefix=f"pair_{session_id}")
         logger.info("[%s] Aligned document|live pair saved: %s", session_id, pair_path)
 
+    tamper_flags: list[str] = list(qr.get("tamper_flags") or [])
+    qr_face_similarity, document_qr_face_similarity = _compare_with_qr_photo(
+        session_id, qr_photo_path, doc_face_path, match.live_embedding, tamper_flags
+    )
+
     # ── Final decision ────────────────────────────────────────────────────────
     rejection_reason: Optional[RejectionReason] = None
-    if match.rejection_reason:
+    if tamper_flags:
+        rejection_reason = RejectionReason.DOCUMENT_TAMPERED
+    elif match.rejection_reason:
         rejection_reason = match.rejection_reason
     elif not liveness_ok:
         rejection_reason = RejectionReason.LIVENESS_FAILED
@@ -184,6 +219,9 @@ async def run_face_verification(
         "rejection_reason": reason_text,
         "reason":           reason_text,
         "live_face_path":   live_face_path,
+        "qr_face_similarity":          qr_face_similarity,
+        "document_qr_face_similarity": document_qr_face_similarity,
+        "tamper_flags":     tamper_flags,
         "updated_at":       datetime.now(timezone.utc),
     })
 
@@ -198,9 +236,51 @@ async def run_face_verification(
         rejection_reason=reason_text,
         reason=reason_text,
         message=f"Verification {decision.value}" + (f" — {reason_text}" if reason_text else ""),
+        qr_face_similarity=qr_face_similarity,
+        document_qr_face_similarity=document_qr_face_similarity,
+        tamper_flags=tamper_flags,
     )
     logger.info("[%s] Face verify API response=%s", session_id, response.model_dump())
     return response
+
+
+def _compare_with_qr_photo(
+    session_id: str,
+    qr_photo_path: Optional[str],
+    doc_face_path: Optional[str],
+    live_embedding,
+    tamper_flags: list[str],
+) -> tuple[Optional[float], Optional[float]]:
+    """
+    Compare the selfie and the printed photo against the photo inside the Aadhaar QR.
+    Both photos come from the same enrolment, so a printed photo that doesn't match
+    the QR photo means it was substituted. Appends to tamper_flags in that case.
+    Returns (selfie↔QR, printed↔QR) similarities.
+    """
+    if not qr_photo_path:
+        return None, None
+    try:
+        qr_embedding = reference_embedding(qr_photo_path)
+        if qr_embedding is None:
+            logger.warning("[%s] No face detected in Aadhaar QR photo %s", session_id, qr_photo_path)
+            return None, None
+
+        selfie_qr = None
+        if live_embedding is not None:
+            selfie_qr = round(max(0.0, cosine_similarity(live_embedding, qr_embedding)), 4)
+
+        printed_qr = None
+        doc_embedding = reference_embedding(doc_face_path) if doc_face_path else None
+        if doc_embedding is not None:
+            printed_qr = round(max(0.0, cosine_similarity(doc_embedding, qr_embedding)), 4)
+            if printed_qr < SIMILARITY_THRESHOLD:
+                tamper_flags.append("Photo printed on the card does not match the photo in the Aadhaar QR code")
+
+        logger.info("[%s] QR photo similarity selfie=%s printed=%s", session_id, selfie_qr, printed_qr)
+        return selfie_qr, printed_qr
+    except Exception:
+        logger.exception("[%s] Aadhaar QR photo comparison failed", session_id)
+        return None, None
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────

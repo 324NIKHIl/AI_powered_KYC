@@ -12,11 +12,13 @@ from typing import Optional
 import numpy as np
 
 from models.verification import (
+    AadhaarQrResult,
     DocumentType,
     ExtractedFields,
     FieldValidation,
     DocumentUploadResponse,
 )
+from services.aadhaar_qr_service import process_aadhaar_qr
 from services.ocr_service import extract_text_full, parse_extracted_fields
 from utils.image_processing import (
     extract_face_mtcnn,
@@ -75,7 +77,14 @@ async def process_document(
     else:
         logger.warning("[%s] No face found in document", session_id)
 
-    # ── 6. Confidence score ───────────────────────────────────────────────────
+    # ── 6. Aadhaar Secure QR (present on e-Aadhaar prints; PVC cards have it on the back) ──
+    aadhaar_qr: Optional[AadhaarQrResult] = None
+    if doc_type in (DocumentType.AADHAAR, DocumentType.UNKNOWN):
+        aadhaar_qr = process_aadhaar_qr(raw_img, session_id, fields, validation)
+        if not aadhaar_qr.found and doc_type == DocumentType.UNKNOWN:
+            aadhaar_qr = None
+
+    # ── 7. Confidence score ───────────────────────────────────────────────────
     confidence = _compute_document_confidence(validation, face_img is not None, doc_type)
     logger.info(
         "[%s] Document confidence=%.4f threshold=%.4f",
@@ -92,8 +101,23 @@ async def process_document(
         document_confidence_score=round(confidence, 4),
         document_face_extracted=face_img is not None,
         document_face_path=face_path,
+        aadhaar_qr=aadhaar_qr,
         message=_build_message(confidence, validation, face_img is not None),
     )
+
+
+async def process_aadhaar_qr_upload(
+    file_bytes: bytes,
+    original_filename: str,
+    session_id: str,
+    ocr_fields: ExtractedFields,
+    validation: FieldValidation,
+) -> AadhaarQrResult:
+    """Second upload for cards whose QR is on the other side (e.g. PVC Aadhaar back)."""
+    doc_dir = os.path.join(UPLOAD_DIR, "documents")
+    qr_path, img = await save_upload_bytes(file_bytes, doc_dir, original_filename)
+    logger.info("[%s] Aadhaar QR side saved: %s shape=%s", session_id, qr_path, img.shape)
+    return process_aadhaar_qr(img, session_id, ocr_fields, validation)
 
 
 # ── Confidence scoring ────────────────────────────────────────────────────────

@@ -189,7 +189,36 @@ Upload identity document for OCR and face extraction.
   "field_validation": { "name": true, "dob": true, "id_number": true },
   "document_confidence_score": 0.95,
   "document_face_extracted": true,
+  "aadhaar_qr": null,
   "message": "Document verified successfully"
+}
+```
+
+For Aadhaar documents, `aadhaar_qr` holds the Secure QR result when the QR code is visible in the uploaded image (see below).
+
+---
+
+### `POST /api/upload-aadhaar-qr`
+
+Upload the side of an Aadhaar card that carries the Secure QR code (the back of PVC cards).
+
+**Form data:**
+- `file` — JPG / PNG / PDF
+- `session_id` — session returned by `/api/upload-document`
+
+**Response:**
+```json
+{
+  "found": true,
+  "qr_format": "secure_v2",
+  "signature_status": "verified",
+  "signing_certificate": "uidai_offline_publickey.cer",
+  "fields": { "name": "Rahul Sharma", "dob": "15-08-1999", "gender": "M", "aadhaar_last4": "1234",
+              "district": "Pune", "state": "Maharashtra", "pincode": "411001" },
+  "field_checks": { "name": "match", "dob": "match", "gender": "match", "aadhaar_last4": "match" },
+  "photo_path": "uploads/faces/qr_face_abc123_1f2e3d4c.jpg",
+  "tamper_flags": [],
+  "message": "Aadhaar QR signature verified with UIDAI's certificate — card details match"
 }
 ```
 
@@ -282,6 +311,31 @@ Final Decision:
 
   REJECTED otherwise (with specific rejection reason)
 ```
+
+---
+
+## Aadhaar Secure QR Verification
+
+Every Aadhaar card and e-Aadhaar issued since 2019 carries a **Secure QR code** digitally
+signed by UIDAI (RSA-2048 / SHA-256). It contains the holder's name, DOB, gender, partial
+address, the last 4 digits of the Aadhaar number, and their **enrolment photo**.
+
+The system decodes it (`services/aadhaar_qr_service.py`) and:
+
+1. **Verifies UIDAI's signature offline.** A forged or edited QR code fails.
+2. **Cross-checks the signed data against OCR.** An edited name, DOB, gender or Aadhaar number on the printed card is flagged. Only fields that OCR itself validated are compared, so misreads don't count as tampering.
+3. **Compares the printed photo with the signed QR photo.** Both come from the same enrolment, so a mismatch means the photo was swapped, the most common Aadhaar forgery.
+
+Any tampering indicator rejects the verification with reason *"Document appears tampered"*.
+If no printed photo could be found, the QR photo is used as the reference for the selfie.
+
+**Setup:** put UIDAI's public-key certificate(s) in `backend/certs/uidai/` (see the README
+there). Without them, QR data is still decoded and cross-checked, but the signature status is
+`unverified`.
+
+**Where the QR is:** on e-Aadhaar prints it is on the same page and is read automatically.
+On PVC cards it is on the back; the verification page offers an optional upload for that side.
+Old pre-2019 cards carry an unsigned XML QR, which is decoded and cross-checked but reported as `unsigned`.
 
 ---
 
