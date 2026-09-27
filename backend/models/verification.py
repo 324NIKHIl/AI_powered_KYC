@@ -36,6 +36,7 @@ class RejectionReason(str, Enum):
     NO_LIVE_FACE            = "No face detected in live capture"
     MULTIPLE_LIVE_FACES     = "More than one face detected in live capture"
     LOW_QUALITY_LIVE_FACE   = "Live face image quality too low — please retake in good lighting, facing the camera"
+    FACE_PROCESSING_ERROR   = "Face comparison failed due to a processing error — please retry"
     NONE                    = ""
 
 

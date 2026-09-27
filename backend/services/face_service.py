@@ -34,17 +34,22 @@ logger = logging.getLogger(__name__)
 # ============================================================
 
 # Raw cosine similarity between aligned, flip-augmented ArcFace embeddings.
+# 0.32 is DeepFace's tuned ArcFace value (cosine distance 0.68), which was
+# calibrated on landmark-aligned faces — valid now that inputs are aligned.
+# Printed ID photos score lower than selfie-vs-selfie, so don't raise it
+# without checking genuine Aadhaar-vs-selfie scores in the logs first.
 SIMILARITY_THRESHOLD = float(
     os.getenv(
         "FACE_SIMILARITY_THRESHOLD",
-        os.getenv("FACE_MATCH_THRESHOLD", "0.40"),
+        os.getenv("FACE_MATCH_THRESHOLD", "0.32"),
     )
 )
 
 FACE_MODEL = os.getenv("FACE_MODEL", "ArcFace")
 
-# Document photos are printed / re-photographed, so MTCNN is less confident on them.
-DOCUMENT_FACE_MIN_CONFIDENCE = 0.80
+# Document photos are printed / re-photographed, so MTCNN is less confident on
+# them; the input here is already a face crop, so false positives are unlikely.
+DOCUMENT_FACE_MIN_CONFIDENCE = 0.70
 LIVE_FACE_MIN_CONFIDENCE = 0.90
 
 # Another face at least this fraction of the main face's area counts as a second person.
@@ -64,6 +69,8 @@ class FaceMatchResult:
     similarity: float
     rejection_reason: Optional[RejectionReason] = None
     live_face_crop: Optional[np.ndarray] = None
+    # Side-by-side of the exact document / live faces fed to the model, for audit & debugging
+    aligned_pair: Optional[np.ndarray] = None
 
 
 # ============================================================
@@ -145,22 +152,41 @@ def _get_model():
     return _model
 
 
+def normalize_domain(face: np.ndarray) -> np.ndarray:
+    """
+    Reduce the printed-ID-photo vs webcam gap before embedding. ID prints have
+    colour casts (e.g. the purple tint of Aadhaar prints) and flat contrast, so
+    both faces are compared as contrast-equalised grayscale.
+    """
+    gray = cv2.cvtColor(face, cv2.COLOR_BGR2GRAY)
+    gray = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4)).apply(gray)
+    return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+
+def _embed_single(model, face: np.ndarray) -> np.ndarray:
+    # BGR scaled to [0, 1] with a batch axis — what DeepFace.represent passes to model.forward
+    batch = face[np.newaxis].astype(np.float32) / 255.0
+    if hasattr(model, "forward"):
+        vector = model.forward(batch)
+    else:  # older DeepFace: build_model returns the Keras model itself
+        vector = model.predict(batch, verbose=0)[0]
+    vector = np.array(vector, dtype=np.float32).reshape(-1)
+    norm = np.linalg.norm(vector)
+    if norm == 0:
+        raise ValueError("model returned a zero embedding")
+    return vector / norm
+
+
 def generate_embedding(aligned: np.ndarray) -> np.ndarray:
     """
     ArcFace embedding of an aligned 112×112 BGR face.
-    Input is BGR scaled to [0, 1], matching what DeepFace.represent feeds the
-    model on its standard (detector) path.
-    The embeddings of the face and its mirror image are L2-normalised and
-    summed, which makes the result robust to the mirrored webcam capture.
+    The embeddings of the face and its mirror image are summed, which makes
+    the result robust to the mirrored webcam capture.
     """
     model = _get_model()
     width, height = getattr(model, "input_shape", (112, 112))
     face = aligned if aligned.shape[:2] == (height, width) else cv2.resize(aligned, (width, height))
-    batch = np.stack([face, cv2.flip(face, 1)]).astype(np.float32) / 255.0
-    keras_model = getattr(model, "model", model)
-    embeddings = np.asarray(keras_model(batch, training=False), dtype=np.float32)
-    embeddings /= np.linalg.norm(embeddings, axis=1, keepdims=True)
-    combined = embeddings.sum(axis=0)
+    combined = _embed_single(model, face) + _embed_single(model, cv2.flip(face, 1))
     return combined / np.linalg.norm(combined)
 
 # ============================================================
@@ -186,6 +212,7 @@ def verify_faces(document_face_path: str, live_img: np.ndarray) -> FaceMatchResu
     Compare the face on the document against the live webcam frame.
     `live_img` is the full frame (not a crop) so that extra faces can be detected.
     """
+    live_crop: Optional[np.ndarray] = None
     try:
         # ── Document face ────────────────────────────────────────────────────
         doc_img = cv2.imread(document_face_path)
@@ -193,11 +220,16 @@ def verify_faces(document_face_path: str, live_img: np.ndarray) -> FaceMatchResu
             logger.warning("Document face could not be read: %s", document_face_path)
             return FaceMatchResult(False, 0.0, RejectionReason.NO_FACE_FOUND)
 
+        # Printed ID photos carry halftone grain / sensor noise that disturbs
+        # both landmark detection and the embedding.
+        doc_img = cv2.fastNlMeansDenoisingColored(doc_img, None, 5, 5, 7, 21)
+
         doc_faces = detect_faces(doc_img, min_confidence=DOCUMENT_FACE_MIN_CONFIDENCE)
         if not doc_faces:
-            logger.warning("No alignable face in document crop %s", document_face_path)
+            logger.warning("No alignable face in document crop %s shape=%s", document_face_path, doc_img.shape)
             return FaceMatchResult(False, 0.0, RejectionReason.NO_FACE_FOUND)
         doc_face = doc_faces[0]
+        logger.info("Document face box=%s conf=%.3f", doc_face["box"], doc_face["confidence"])
 
         # ── Live face ────────────────────────────────────────────────────────
         live_faces = detect_faces(live_img, min_confidence=LIVE_FACE_MIN_CONFIDENCE)
@@ -206,6 +238,7 @@ def verify_faces(document_face_path: str, live_img: np.ndarray) -> FaceMatchResu
             return FaceMatchResult(False, 0.0, RejectionReason.NO_LIVE_FACE)
         live_face = live_faces[0]
         live_crop = crop_face(live_img, live_face["box"])
+        logger.info("Live face box=%s conf=%.3f faces=%d", live_face["box"], live_face["confidence"], len(live_faces))
 
         main_area = live_face["box"][2] * live_face["box"][3]
         others = [f for f in live_faces[1:] if f["box"][2] * f["box"][3] >= SECOND_FACE_AREA_RATIO * main_area]
@@ -222,18 +255,20 @@ def verify_faces(document_face_path: str, live_img: np.ndarray) -> FaceMatchResu
             logger.warning("Live face quality rejected: %s", quality_reason)
             return FaceMatchResult(False, 0.0, RejectionReason.LOW_QUALITY_LIVE_FACE, live_crop)
 
+        doc_input = normalize_domain(doc_aligned)
+        live_input = normalize_domain(live_aligned)
+        aligned_pair = np.hstack([doc_input, live_input])
+
         # ── Embeddings + similarity ──────────────────────────────────────────
-        similarity = cosine_similarity(generate_embedding(doc_aligned), generate_embedding(live_aligned))
+        similarity = cosine_similarity(generate_embedding(doc_input), generate_embedding(live_input))
         verified = similarity >= SIMILARITY_THRESHOLD
 
         logger.info(
-            "Face similarity=%.4f threshold=%.4f model=%s verified=%s doc_conf=%.3f live_conf=%.3f",
+            "Face similarity=%.4f threshold=%.4f model=%s verified=%s",
             similarity,
             SIMILARITY_THRESHOLD,
             FACE_MODEL,
             verified,
-            doc_face["confidence"],
-            live_face["confidence"],
         )
 
         return FaceMatchResult(
@@ -241,8 +276,10 @@ def verify_faces(document_face_path: str, live_img: np.ndarray) -> FaceMatchResu
             similarity=max(0.0, min(1.0, similarity)),
             rejection_reason=None if verified else RejectionReason.FACE_MISMATCH,
             live_face_crop=live_crop,
+            aligned_pair=aligned_pair,
         )
 
     except Exception:
-        logger.exception("Verification failed")
-        return FaceMatchResult(False, 0.0, RejectionReason.FACE_MISMATCH)
+        # Never report an internal error as a face mismatch — it hides bugs.
+        logger.exception("Face verification error")
+        return FaceMatchResult(False, 0.0, RejectionReason.FACE_PROCESSING_ERROR, live_crop)
