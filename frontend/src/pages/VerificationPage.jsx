@@ -19,6 +19,9 @@ export default function VerificationPage() {
   const [processingFace, setProcessingFace] = useState(false)
 
   const currentStep = state.step
+  const documentType = state.documentResult?.document_type
+  const showQrPanel = ['aadhaar', 'unknown'].includes(documentType) || Boolean(state.documentResult?.aadhaar_qr)
+  const qrPending = showQrPanel && !state.documentResult?.aadhaar_qr?.found
 
   // ── Step 1 → 2: Upload document ─────────────────────────────────────────
   async function handleDocumentSubmit() {
@@ -169,15 +172,20 @@ export default function VerificationPage() {
                     : 'No face detected — face match may fail'}
                 </span>
               </div>
-
-              <button onClick={() => dispatch({ type: 'SET_STEP', payload: 3 })} className="btn-primary w-full">
-                Next: Live Face Capture →
-              </button>
             </div>
 
-            {(state.documentResult.document_type === 'aadhaar' || state.documentResult.aadhaar_qr) && (
+            {/* Aadhaar back side / QR — shown before "Next" so it isn't missed.
+                Also offered for unknown documents in case type detection missed an Aadhaar. */}
+            {showQrPanel && (
               <AadhaarQrPanel qr={state.documentResult.aadhaar_qr} onUpload={handleQrUpload} />
             )}
+
+            <button
+              onClick={() => dispatch({ type: 'SET_STEP', payload: 3 })}
+              className={qrPending ? 'btn-secondary w-full' : 'btn-primary w-full'}
+            >
+              {qrPending ? 'Skip QR check — continue to Live Face Capture →' : 'Next: Live Face Capture →'}
+            </button>
           </motion.div>
         )}
 

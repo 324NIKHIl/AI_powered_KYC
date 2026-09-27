@@ -14,6 +14,7 @@ from models.verification import DocumentType
 
 # ── ID-number patterns ────────────────────────────────────────────────────────
 _AADHAAR_RE  = re.compile(r"\b[2-9]\d{3}\s?\d{4}\s?\d{4}\b")
+_AADHAAR_GROUPED_RE = re.compile(r"\b[2-9]\d{3}[\s\.,-]*\d{4}[\s\.,-]*\d{4}\b")
 _PAN_RE      = re.compile(r"\b[A-Z]{5}[0-9]{4}[A-Z]{1}\b")
 _PASSPORT_RE = re.compile(r"\b[A-Z]{1}[0-9]{7}\b")
 
@@ -82,9 +83,12 @@ def detect_document_type(text: str) -> DocumentType:
     upper = text.upper()
 
     # Strong Aadhaar signals
-    if any(kw in upper for kw in ["AADHAAR", "AADHAR", "UNIQUE IDENTIFICATION"]):
+    if any(kw in upper for kw in ["AADHAAR", "AADHAR", "UNIQUE IDENTIFICATION", "UIDAI", "ENROLMENT NO"]):
         return DocumentType.AADHAAR
-    if _AADHAAR_RE.search(re.sub(r"\s", "", text)):
+    # 12-digit number printed in groups of four ("4017 1397 4861"). Searched with
+    # whitespace intact — stripping it first glues the number to neighbouring
+    # words ("Male401713974861") so the word boundaries never match.
+    if _AADHAAR_GROUPED_RE.search(text):
         return DocumentType.AADHAAR
 
     # PAN signals

@@ -113,8 +113,9 @@ export default function AadhaarQrPanel({
       {!found && onUpload && (
         <div className="space-y-3 pt-2 border-t border-white/5">
           <p className="text-sm text-white/60">
-            On PVC Aadhaar cards the QR code is on the back. Upload that side to verify the card
-            with UIDAI's signature — optional, but it catches edited cards and swapped photos.
+            <span className="text-white font-medium">Aadhaar card? Upload the side with the QR code</span> —
+            on PVC cards it's the back. It's verified with UIDAI's digital signature: optional, but it
+            catches edited cards and swapped photos.
           </p>
           <DocumentUpload onFileSelected={setFile} uploading={uploading} uploadProgress={0} />
           <button onClick={handleUpload} disabled={!file || uploading} className="btn-secondary w-full">
