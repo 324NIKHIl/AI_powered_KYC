@@ -38,18 +38,25 @@ def _describe_certificates() -> None:
     for name in certs:
         with open(os.path.join(q.UIDAI_CERT_DIR, name), "rb") as fh:
             blob = fh.read()
+        print(f"  {name}")
         try:
             cert = (x509.load_pem_x509_certificate(blob) if b"-----BEGIN" in blob
                     else x509.load_der_x509_certificate(blob))
+            subject = cert.subject.rfc4514_string()
+            # *_utc attributes exist from cryptography 42; older versions only have the naive ones
+            start = getattr(cert, "not_valid_before_utc", None) or cert.not_valid_before
+            end = getattr(cert, "not_valid_after_utc", None) or cert.not_valid_after
+            print(f"      subject: {subject}")
+            print(f"      valid:   {start:%Y-%m-%d} → {end:%Y-%m-%d}")
         except ValueError:
-            print(f"  {name}: NOT a readable X.509 certificate")
-            continue
-        # *_utc attributes exist from cryptography 42; older versions only have the naive ones
-        start = getattr(cert, "not_valid_before_utc", None) or cert.not_valid_before
-        end = getattr(cert, "not_valid_after_utc", None) or cert.not_valid_after
-        print(f"  {name}")
-        print(f"      subject: {cert.subject.rfc4514_string()}")
-        print(f"      valid:   {start:%Y-%m-%d} → {end:%Y-%m-%d}")
+            try:
+                _, subject = q._read_certificate(blob)
+            except Exception as exc:
+                print(f"      NOT a readable certificate: {exc}")
+                continue
+            print("      non-standard encoding — public key extracted directly")
+        if q.is_staging_certificate(subject):
+            print("      ⚠ STAGING certificate — skipped, it cannot verify real Aadhaar cards")
     print()
 
 
