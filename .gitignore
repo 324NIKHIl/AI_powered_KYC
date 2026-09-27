@@ -21,8 +21,6 @@ frontend/dist/
 frontend/node_modules/.vite/
 
 # Runtime uploads / generated files
-uploads/
-backend/uploads/
 *.log
 
 # OS / editor
