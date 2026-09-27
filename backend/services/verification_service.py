@@ -139,6 +139,9 @@ async def run_face_verification(
     if match.live_face_crop is not None:
         live_face_path = save_image(match.live_face_crop, "uploads/faces", prefix=f"live_{session_id}")
         logger.info("[%s] Live face saved: %s", session_id, live_face_path)
+    if match.aligned_pair is not None:
+        pair_path = save_image(match.aligned_pair, "uploads/faces", prefix=f"pair_{session_id}")
+        logger.info("[%s] Aligned document|live pair saved: %s", session_id, pair_path)
 
     # ── Final decision ────────────────────────────────────────────────────────
     rejection_reason: Optional[RejectionReason] = None
