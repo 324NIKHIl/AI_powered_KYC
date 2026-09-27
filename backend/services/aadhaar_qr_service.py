@@ -30,6 +30,7 @@ import io
 import logging
 import os
 import re
+import ssl
 import xml.etree.ElementTree as ET
 import zlib
 from dataclasses import dataclass
@@ -94,6 +95,50 @@ def _qr_variants(img: np.ndarray) -> Iterator[np.ndarray]:
     yield cv2.addWeighted(gray, 1.5, blurred, -0.5, 0)  # unsharp mask
 
 
+def _rectified_variants(gray: np.ndarray, detectors: list) -> Iterator[np.ndarray]:
+    """
+    Locate the QR, warp it flat onto a large square with a white quiet zone and
+    yield cleaned-up versions. A Secure QR is ~150 modules wide, so in a normal
+    phone photo each module is only 2–3 px and slightly skewed — too little for
+    the decoder, although the detector can still find the corners.
+    """
+    corners = None
+    for detector in detectors:
+        try:
+            ok, points = detector.detect(gray)
+        except cv2.error:
+            continue
+        if ok and points is not None:
+            corners = points.reshape(-1, 2)[:4].astype(np.float32)
+            break
+    if corners is None:
+        return
+
+    for size in (1200, 1500, 1800):
+        margin = size // 10
+        target = np.float32([[margin, margin], [margin + size, margin],
+                             [margin + size, margin + size], [margin, margin + size]])
+        matrix = cv2.getPerspectiveTransform(corners, target)
+        flat = cv2.warpPerspective(gray, matrix, (size + 2 * margin, size + 2 * margin),
+                                   flags=cv2.INTER_CUBIC, borderValue=255)
+        yield flat
+        yield cv2.adaptiveThreshold(flat, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                    cv2.THRESH_BINARY, (size // 40) | 1, 5)
+        yield cv2.addWeighted(flat, 1.8, cv2.GaussianBlur(flat, (0, 0), size / 300), -0.8, 0)
+
+
+def _try_decode(variants: Iterator[np.ndarray], detectors: list) -> Optional[str]:
+    for variant in variants:
+        for detector in detectors:
+            try:
+                text, _, _ = detector.detectAndDecode(variant)
+            except cv2.error:
+                continue
+            if text:
+                return text
+    return None
+
+
 def decode_qr_strings(img: np.ndarray) -> list[str]:
     """Return every QR payload that can be decoded from the image."""
     detectors = []
@@ -101,14 +146,12 @@ def decode_qr_strings(img: np.ndarray) -> list[str]:
         detectors.append(cv2.QRCodeDetectorAruco())
     detectors.append(cv2.QRCodeDetector())
 
-    for variant in _qr_variants(img):
-        for detector in detectors:
-            try:
-                text, _, _ = detector.detectAndDecode(variant)
-            except cv2.error:
-                continue
-            if text:
-                return [text]
+    text = _try_decode(_qr_variants(img), detectors)
+    if not text:
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+        text = _try_decode(_rectified_variants(gray, detectors), detectors)
+    if text:
+        return [text]
 
     # pyzbar copes better with very dense codes, if installed (needs the zbar system library)
     try:
@@ -182,9 +225,55 @@ def parse_secure_qr(qr_text: str) -> SecureQrPayload:
     return SecureQrPayload(qr_format, fields, photo, signed_data, signature)
 
 
-def _load_uidai_keys() -> list[tuple[str, Any]]:
+def _der_element(der: bytes, pos: int) -> tuple[int, int, int]:
+    """Parse one DER TLV at pos → (tag, content_start, end)."""
+    tag, length = der[pos], der[pos + 1]
+    pos += 2
+    if length & 0x80:
+        n = length & 0x7F
+        length = int.from_bytes(der[pos:pos + n], "big")
+        pos += n
+    return tag, pos, pos + length
+
+
+def _public_key_from_certificate_der(der: bytes):
+    """
+    Extract SubjectPublicKeyInfo from a certificate without full X.509 parsing.
+    Some UIDAI certificates contain DER encoding quirks (e.g. an explicitly
+    encoded default "critical=FALSE") that cryptography >= 42 rejects outright.
+    """
+    from cryptography.hazmat.primitives.serialization import load_der_public_key
+
+    _, cert_start, _ = _der_element(der, 0)         # Certificate
+    _, pos, _ = _der_element(der, cert_start)       # tbsCertificate
+    tag, _, end = _der_element(der, pos)
+    if tag == 0xA0:                                 # optional [0] version
+        pos = end
+    for _ in range(5):                              # serial, signature alg, issuer, validity, subject
+        pos = _der_element(der, pos)[2]
+    return load_der_public_key(der[pos:_der_element(der, pos)[2]])
+
+
+def _read_certificate(blob: bytes) -> tuple[Any, str]:
+    """Return (public_key, subject) for a PEM or DER certificate."""
     from cryptography import x509
 
+    is_pem = b"-----BEGIN" in blob
+    try:
+        cert = x509.load_pem_x509_certificate(blob) if is_pem else x509.load_der_x509_certificate(blob)
+        return cert.public_key(), cert.subject.rfc4514_string()
+    except ValueError:
+        der = ssl.PEM_cert_to_DER_cert(blob.decode("ascii")) if is_pem else blob
+        # Subject strings are plain ASCII inside the DER, good enough for the staging check
+        subject = "staging" if b"staging" in der.lower() else "(unparsed)"
+        return _public_key_from_certificate_der(der), subject
+
+
+def is_staging_certificate(subject: str) -> bool:
+    return any(word in subject.lower() for word in ("staging", "preprod", "pre-prod", "pre-production"))
+
+
+def _load_uidai_keys() -> list[tuple[str, Any]]:
     keys = []
     for path in sorted(glob.glob(os.path.join(UIDAI_CERT_DIR, "*"))):
         if not path.lower().endswith((".cer", ".crt", ".pem", ".der")):
@@ -192,20 +281,20 @@ def _load_uidai_keys() -> list[tuple[str, Any]]:
         with open(path, "rb") as fh:
             blob = fh.read()
         try:
-            if b"-----BEGIN" in blob:
-                cert = x509.load_pem_x509_certificate(blob)
-            else:
-                cert = x509.load_der_x509_certificate(blob)
-        except ValueError:
-            logger.warning("Skipping unreadable certificate %s", path)
+            public_key, subject = _read_certificate(blob)
+        except Exception as exc:
+            logger.warning("Skipping unreadable certificate %s: %s", path, exc)
             continue
-        subject = cert.subject.rfc4514_string().lower()
-        if any(word in subject for word in ("staging", "preprod", "pre-prod", "pre-production")):
+        if is_staging_certificate(subject):
+            # Real cards are signed with UIDAI's production key; a staging cert can only
+            # ever report "invalid", which would falsely flag genuine cards as tampered.
             logger.warning(
-                "Certificate %s looks like a staging/test certificate (%s) — it will not verify real Aadhaar QR codes",
-                path, cert.subject.rfc4514_string(),
+                "Skipping %s: staging/test certificate (%s) — it cannot verify real Aadhaar QR codes. "
+                "Add UIDAI's production Secure QR certificate.",
+                path, subject,
             )
-        keys.append((os.path.basename(path), cert.public_key()))
+            continue
+        keys.append((os.path.basename(path), public_key))
     return keys
 
 
@@ -326,6 +415,10 @@ def _decode_photo(photo: bytes) -> Optional[np.ndarray]:
         img = cv2.imdecode(np.frombuffer(photo, np.uint8), cv2.IMREAD_COLOR)
     if img is None:
         return None
+    # The QR photo is cropped tight to the face; face detectors need some margin around it
+    pad = max(img.shape[:2]) // 4
+    fill = [int(c) for c in img.reshape(-1, 3).mean(axis=0)]
+    img = cv2.copyMakeBorder(img, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=fill)
     shortest = min(img.shape[:2])
     if shortest < QR_PHOTO_MIN_SIDE:
         scale = QR_PHOTO_MIN_SIDE / shortest
