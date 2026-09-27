@@ -199,6 +199,12 @@ def _load_uidai_keys() -> list[tuple[str, Any]]:
         except ValueError:
             logger.warning("Skipping unreadable certificate %s", path)
             continue
+        subject = cert.subject.rfc4514_string().lower()
+        if any(word in subject for word in ("staging", "preprod", "pre-prod", "pre-production")):
+            logger.warning(
+                "Certificate %s looks like a staging/test certificate (%s) — it will not verify real Aadhaar QR codes",
+                path, cert.subject.rfc4514_string(),
+            )
         keys.append((os.path.basename(path), cert.public_key()))
     return keys
 
