@@ -71,6 +71,8 @@ class FaceMatchResult:
     live_face_crop: Optional[np.ndarray] = None
     # Side-by-side of the exact document / live faces fed to the model, for audit & debugging
     aligned_pair: Optional[np.ndarray] = None
+    # Kept so the selfie can also be compared against other references (e.g. the Aadhaar QR photo)
+    live_embedding: Optional[np.ndarray] = None
 
 
 # ============================================================
@@ -207,6 +209,34 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 # MAIN VERIFICATION
 # ============================================================
 
+def _prepare_reference_face(path: str) -> Optional[np.ndarray]:
+    """
+    Aligned, domain-normalised face from a document or QR photo,
+    or None if the file is unreadable / has no detectable face.
+    """
+    img = cv2.imread(path)
+    if img is None:
+        logger.warning("Reference face could not be read: %s", path)
+        return None
+
+    # Printed ID photos carry halftone grain / sensor noise that disturbs
+    # both landmark detection and the embedding.
+    img = cv2.fastNlMeansDenoisingColored(img, None, 5, 5, 7, 21)
+
+    faces = detect_faces(img, min_confidence=DOCUMENT_FACE_MIN_CONFIDENCE)
+    if not faces:
+        logger.warning("No alignable face in %s shape=%s", path, img.shape)
+        return None
+    logger.info("Reference face %s box=%s conf=%.3f", path, faces[0]["box"], faces[0]["confidence"])
+    return normalize_domain(align_face(img, faces[0]["keypoints"]))
+
+
+def reference_embedding(path: str) -> Optional[np.ndarray]:
+    """Embedding of the face in a document / QR photo, or None if no face is found."""
+    face = _prepare_reference_face(path)
+    return None if face is None else generate_embedding(face)
+
+
 def verify_faces(document_face_path: str, live_img: np.ndarray) -> FaceMatchResult:
     """
     Compare the face on the document against the live webcam frame.
@@ -215,21 +245,9 @@ def verify_faces(document_face_path: str, live_img: np.ndarray) -> FaceMatchResu
     live_crop: Optional[np.ndarray] = None
     try:
         # ── Document face ────────────────────────────────────────────────────
-        doc_img = cv2.imread(document_face_path)
-        if doc_img is None:
-            logger.warning("Document face could not be read: %s", document_face_path)
+        doc_input = _prepare_reference_face(document_face_path)
+        if doc_input is None:
             return FaceMatchResult(False, 0.0, RejectionReason.NO_FACE_FOUND)
-
-        # Printed ID photos carry halftone grain / sensor noise that disturbs
-        # both landmark detection and the embedding.
-        doc_img = cv2.fastNlMeansDenoisingColored(doc_img, None, 5, 5, 7, 21)
-
-        doc_faces = detect_faces(doc_img, min_confidence=DOCUMENT_FACE_MIN_CONFIDENCE)
-        if not doc_faces:
-            logger.warning("No alignable face in document crop %s shape=%s", document_face_path, doc_img.shape)
-            return FaceMatchResult(False, 0.0, RejectionReason.NO_FACE_FOUND)
-        doc_face = doc_faces[0]
-        logger.info("Document face box=%s conf=%.3f", doc_face["box"], doc_face["confidence"])
 
         # ── Live face ────────────────────────────────────────────────────────
         live_faces = detect_faces(live_img, min_confidence=LIVE_FACE_MIN_CONFIDENCE)
@@ -247,7 +265,6 @@ def verify_faces(document_face_path: str, live_img: np.ndarray) -> FaceMatchResu
             return FaceMatchResult(False, 0.0, RejectionReason.MULTIPLE_LIVE_FACES, live_crop)
 
         # ── Alignment + quality ──────────────────────────────────────────────
-        doc_aligned = align_face(doc_img, doc_face["keypoints"])
         live_aligned = align_face(live_img, live_face["keypoints"])
 
         quality_ok, quality_reason = check_face_quality(live_aligned, live_face["keypoints"])
@@ -255,12 +272,12 @@ def verify_faces(document_face_path: str, live_img: np.ndarray) -> FaceMatchResu
             logger.warning("Live face quality rejected: %s", quality_reason)
             return FaceMatchResult(False, 0.0, RejectionReason.LOW_QUALITY_LIVE_FACE, live_crop)
 
-        doc_input = normalize_domain(doc_aligned)
         live_input = normalize_domain(live_aligned)
         aligned_pair = np.hstack([doc_input, live_input])
 
         # ── Embeddings + similarity ──────────────────────────────────────────
-        similarity = cosine_similarity(generate_embedding(doc_input), generate_embedding(live_input))
+        live_embedding = generate_embedding(live_input)
+        similarity = cosine_similarity(generate_embedding(doc_input), live_embedding)
         verified = similarity >= SIMILARITY_THRESHOLD
 
         logger.info(
@@ -277,6 +294,7 @@ def verify_faces(document_face_path: str, live_img: np.ndarray) -> FaceMatchResu
             rejection_reason=None if verified else RejectionReason.FACE_MISMATCH,
             live_face_crop=live_crop,
             aligned_pair=aligned_pair,
+            live_embedding=live_embedding,
         )
 
     except Exception:

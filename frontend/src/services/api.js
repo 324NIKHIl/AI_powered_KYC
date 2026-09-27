@@ -71,6 +71,23 @@ export async function uploadDocument(file, sessionId = '', onProgress) {
   }
 }
 
+/**
+ * Upload the side of an Aadhaar card that carries the Secure QR code
+ * (e.g. the back of a PVC card) for UIDAI signature verification.
+ * @param {string} sessionId
+ * @param {File} file
+ */
+export async function uploadAadhaarQr(sessionId, file) {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('session_id', sessionId)
+  const { data } = await api.post('/upload-aadhaar-qr', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  console.log('[UPLOAD_AADHAAR_QR RESULT]', data)
+  return data
+}
+
 // ── Face Verification ─────────────────────────────────────────────────────────
 
 /**

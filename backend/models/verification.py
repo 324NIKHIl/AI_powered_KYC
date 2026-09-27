@@ -37,6 +37,7 @@ class RejectionReason(str, Enum):
     MULTIPLE_LIVE_FACES     = "More than one face detected in live capture"
     LOW_QUALITY_LIVE_FACE   = "Live face image quality too low — please retake in good lighting, facing the camera"
     FACE_PROCESSING_ERROR   = "Face comparison failed due to a processing error — please retry"
+    DOCUMENT_TAMPERED       = "Document appears tampered — it does not match the UIDAI-signed Aadhaar QR code"
     NONE                    = ""
 
 
@@ -56,6 +57,27 @@ class FieldValidation(BaseModel):
     id_number: bool = False
 
 
+class QrSignatureStatus(str, Enum):
+    VERIFIED   = "verified"    # RSA signature checked against a UIDAI certificate
+    INVALID    = "invalid"     # certificates configured, none verifies → forged / edited QR
+    UNVERIFIED = "unverified"  # no UIDAI certificate configured on the server
+    UNSIGNED   = "unsigned"    # pre-2019 XML QR, which carries no signature
+
+
+class AadhaarQrResult(BaseModel):
+    found:               bool = False
+    qr_format:           Optional[str] = None   # secure_v2 | secure_v1 | legacy_xml
+    signature_status:    Optional[QrSignatureStatus] = None
+    signing_certificate: Optional[str] = None
+    # Signed data: name, dob, gender, aadhaar_last4, district, state, pincode
+    fields:              dict[str, Optional[str]] = Field(default_factory=dict)
+    # field → "match" | "mismatch" | "unavailable", comparing QR data with OCR
+    field_checks:        dict[str, str] = Field(default_factory=dict)
+    photo_path:          Optional[str] = None
+    tamper_flags:        list[str] = Field(default_factory=list)
+    message:             str = ""
+
+
 # ── API Request / Response Models ─────────────────────────────────────────────
 
 class DocumentUploadResponse(BaseModel):
@@ -66,6 +88,7 @@ class DocumentUploadResponse(BaseModel):
     document_confidence_score: float = Field(..., ge=0.0, le=1.0)
     document_face_extracted:  bool
     document_face_path:       Optional[str] = None
+    aadhaar_qr:               Optional[AadhaarQrResult] = None
     message:                  str
 
 
@@ -86,6 +109,10 @@ class FaceVerifyResponse(BaseModel):
     rejection_reason: Optional[str] = None
     reason:           Optional[str] = None
     message:          str
+    # Selfie vs photo in the signed Aadhaar QR, and printed photo vs QR photo
+    qr_face_similarity:          Optional[float] = None
+    document_qr_face_similarity: Optional[float] = None
+    tamper_flags:     list[str] = Field(default_factory=list)
 
 
 # ── MongoDB Document Schema (stored record) ───────────────────────────────────
