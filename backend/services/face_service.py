@@ -1,27 +1,31 @@
 """
-Secure Face Verification Service for KYC
-Improved version with:
-- Strict threshold
-- ArcFace model
-- Stronger detection
-- Anti-spoofing
-- Better validation
-- Safer similarity logic
-- Multi-check verification
+Face Verification Service for KYC
 
-Requirements:
-pip install deepface opencv-python numpy face_recognition
+Pipeline:
+1. Detect faces with MTCNN (largest face on the document; exactly one face in the live frame)
+2. Quality gate on the live face (size, pose, blur, brightness)
+3. Align both faces onto the ArcFace 5-point landmark template (112×112)
+4. ArcFace embeddings with horizontal-flip test-time augmentation
+5. Cosine similarity against a threshold
+
+Alignment is the critical step: ArcFace is trained on landmark-aligned crops, and
+feeding it loose, unaligned crops (as the previous version did via
+detector_backend="skip") produces embeddings dominated by pose/background, which
+lets different people clear the threshold and the same person miss it.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import uuid
+from dataclasses import dataclass
 from typing import Optional, Tuple
 
 import cv2
 import numpy as np
+
+from models.verification import RejectionReason
+from utils.image_processing import align_face, crop_face, detect_faces
 
 logger = logging.getLogger(__name__)
 
@@ -29,61 +33,69 @@ logger = logging.getLogger(__name__)
 # CONFIGURATION
 # ============================================================
 
-# Raw ArcFace cosine similarity is much lower than the old normalized score.
-# DeepFace's tuned ArcFace cosine distance threshold is 0.68, which maps to
-# raw cosine similarity >= 0.32.
+# Raw cosine similarity between aligned, flip-augmented ArcFace embeddings.
 SIMILARITY_THRESHOLD = float(
     os.getenv(
         "FACE_SIMILARITY_THRESHOLD",
-        os.getenv("FACE_MATCH_THRESHOLD", "0.32"),
+        os.getenv("FACE_MATCH_THRESHOLD", "0.40"),
     )
 )
 
-# Better than FaceNet
 FACE_MODEL = os.getenv("FACE_MODEL", "ArcFace")
 
-# Used only when a full image needs DeepFace-side detection. The verification
-# path compares crops that were already produced by MTCNN/OpenCV, so embedding
-# generation deliberately uses detector_backend="skip" to avoid a second
-# detector pass and TensorFlow/Keras conflicts.
-DETECTOR_BACKEND = os.getenv("FACE_DETECTOR", "retinaface")
+# Document photos are printed / re-photographed, so MTCNN is less confident on them.
+DOCUMENT_FACE_MIN_CONFIDENCE = 0.80
+LIVE_FACE_MIN_CONFIDENCE = 0.90
+
+# Another face at least this fraction of the main face's area counts as a second person.
+SECOND_FACE_AREA_RATIO = 0.20
+
+# Live-face quality gates
+MIN_EYE_DISTANCE_PX = float(os.getenv("FACE_MIN_EYE_DISTANCE_PX", "30"))
+MAX_YAW_RATIO = 0.35  # |nose offset from eye midpoint| / eye distance
+MIN_BLUR_SCORE = 20.0
+MIN_BRIGHTNESS = 40.0
+MAX_BRIGHTNESS = 220.0
+
+
+@dataclass
+class FaceMatchResult:
+    verified: bool
+    similarity: float
+    rejection_reason: Optional[RejectionReason] = None
+    live_face_crop: Optional[np.ndarray] = None
+
 
 # ============================================================
 # FACE QUALITY CHECKS
 # ============================================================
 
-def check_image_quality(img: np.ndarray) -> Tuple[bool, str]:
-    """
-    Checks if image quality is acceptable.
-    """
+def check_face_quality(aligned: np.ndarray, keypoints: dict) -> Tuple[bool, str]:
+    """Quality gate on a live face: size, frontal pose, sharpness, exposure."""
+    left_eye = np.array(keypoints["left_eye"], dtype=np.float64)
+    right_eye = np.array(keypoints["right_eye"], dtype=np.float64)
+    nose = np.array(keypoints["nose"], dtype=np.float64)
 
-    if img is None:
-        return False, "Image is empty"
+    eye_distance = float(np.linalg.norm(right_eye - left_eye))
+    if eye_distance < MIN_EYE_DISTANCE_PX:
+        return False, f"face too small (eye distance {eye_distance:.0f}px)"
 
-    h, w = img.shape[:2]
+    yaw_ratio = abs(nose[0] - (left_eye[0] + right_eye[0]) / 2) / eye_distance
+    if yaw_ratio > MAX_YAW_RATIO:
+        return False, f"face not frontal (yaw ratio {yaw_ratio:.2f})"
 
-    # Minimum resolution
-    if h < 120 or w < 120:
-        return False, "Face resolution too low"
-
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    # Blur detection
+    gray = cv2.cvtColor(aligned, cv2.COLOR_BGR2GRAY)
     blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
+    if blur_score < MIN_BLUR_SCORE:
+        return False, f"too blurry (score {blur_score:.1f})"
 
-    if blur_score < 30:  # Reduced from 80 to be less strict
-        return False, "Image too blurry"
+    brightness = float(np.mean(gray))
+    if brightness < MIN_BRIGHTNESS:
+        return False, f"too dark (brightness {brightness:.0f})"
+    if brightness > MAX_BRIGHTNESS:
+        return False, f"too bright (brightness {brightness:.0f})"
 
-    # Brightness check
-    brightness = np.mean(gray)
-
-    if brightness < 30:  # Reduced from 40
-        return False, "Image too dark"
-
-    if brightness > 230:  # Increased from 220
-        return False, "Image too bright"
-
-    return True, "Good quality"
+    return True, "good quality"
 
 # ============================================================
 # LIVENESS CHECK
@@ -122,31 +134,34 @@ def check_liveness(img: np.ndarray) -> Tuple[bool, float]:
 # EMBEDDING
 # ============================================================
 
-def generate_embedding(img_path: str) -> Optional[np.ndarray]:
+_model = None
 
-    try:
+
+def _get_model():
+    global _model
+    if _model is None:
         from deepface import DeepFace
+        _model = DeepFace.build_model(FACE_MODEL)
+    return _model
 
-        result = DeepFace.represent(
-            img_path=img_path,
-            model_name=FACE_MODEL,
-            detector_backend="skip",
-            enforce_detection=False,
-            align=True,
-            anti_spoofing=False  # Disabled as it's too strict and causes false rejections
-        )
 
-        if isinstance(result, list) and len(result) > 0:
-            embedding = result[0]["embedding"]
-            logger.info("Embedding generated successfully for %s (dims: %d)", img_path, len(embedding))
-            return np.array(embedding, dtype=np.float32)
-
-        logger.warning("No faces detected for embedding in %s", img_path)
-        return None
-
-    except Exception as exc:
-        logger.error("Embedding generation failed for %s: %s", img_path, exc)
-        return None
+def generate_embedding(aligned: np.ndarray) -> np.ndarray:
+    """
+    ArcFace embedding of an aligned 112×112 BGR face.
+    Input is BGR scaled to [0, 1], matching what DeepFace.represent feeds the
+    model on its standard (detector) path.
+    The embeddings of the face and its mirror image are L2-normalised and
+    summed, which makes the result robust to the mirrored webcam capture.
+    """
+    model = _get_model()
+    width, height = getattr(model, "input_shape", (112, 112))
+    face = aligned if aligned.shape[:2] == (height, width) else cv2.resize(aligned, (width, height))
+    batch = np.stack([face, cv2.flip(face, 1)]).astype(np.float32) / 255.0
+    keras_model = getattr(model, "model", model)
+    embeddings = np.asarray(keras_model(batch, training=False), dtype=np.float32)
+    embeddings /= np.linalg.norm(embeddings, axis=1, keepdims=True)
+    combined = embeddings.sum(axis=0)
+    return combined / np.linalg.norm(combined)
 
 # ============================================================
 # COSINE SIMILARITY
@@ -162,221 +177,72 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 
     return float(np.dot(a, b) / (norm_a * norm_b))
 
-
-def cosine_distance_from_similarity(similarity: float) -> float:
-    """DeepFace cosine distance is 1 - raw cosine similarity."""
-    return 1.0 - similarity
-
-# ============================================================
-# SAVE TEMP IMAGE
-# ============================================================
-
-def save_temp_image(img: np.ndarray) -> str:
-
-    os.makedirs("uploads/faces", exist_ok=True)
-
-    temp_path = f"uploads/faces/{uuid.uuid4().hex}.jpg"
-
-    cv2.imwrite(
-        temp_path,
-        img,
-        [int(cv2.IMWRITE_JPEG_QUALITY), 95]
-    )
-
-    return temp_path
-
-# ============================================================
-# FACE DETECTION VALIDATION
-# ============================================================
-
-def validate_single_face(img_path: str) -> bool:
-    """
-    Validate that a saved face crop is usable.
-
-    The document and live images passed to verify_faces are already face crops.
-    Running RetinaFace again here can fail in the FastAPI process after MTCNN
-    has initialized TensorFlow/Keras, causing false rejections with score 0.
-    """
-    img = cv2.imread(img_path)
-    if img is None:
-        logger.warning("Face crop could not be read: %s", img_path)
-        return False
-
-    h, w = img.shape[:2]
-    if h < 80 or w < 80:
-        logger.warning("Face crop too small for embedding: %s shape=%s", img_path, img.shape)
-        return False
-
-    return True
-
 # ============================================================
 # MAIN VERIFICATION
 # ============================================================
 
-def verify_faces(
-    document_face_path: str,
-    live_face_img: np.ndarray
-) -> tuple[bool, float]:
-
+def verify_faces(document_face_path: str, live_img: np.ndarray) -> FaceMatchResult:
     """
-    Returns:
-    (
-        verified,
-        similarity_score
-    )
+    Compare the face on the document against the live webcam frame.
+    `live_img` is the full frame (not a crop) so that extra faces can be detected.
     """
-
-    live_temp_path = None
-
     try:
+        # ── Document face ────────────────────────────────────────────────────
+        doc_img = cv2.imread(document_face_path)
+        if doc_img is None:
+            logger.warning("Document face could not be read: %s", document_face_path)
+            return FaceMatchResult(False, 0.0, RejectionReason.NO_FACE_FOUND)
 
-        # ----------------------------------------------------
-        # IMAGE QUALITY CHECK
-        # ----------------------------------------------------
+        doc_faces = detect_faces(doc_img, min_confidence=DOCUMENT_FACE_MIN_CONFIDENCE)
+        if not doc_faces:
+            logger.warning("No alignable face in document crop %s", document_face_path)
+            return FaceMatchResult(False, 0.0, RejectionReason.NO_FACE_FOUND)
+        doc_face = doc_faces[0]
 
-        quality_ok, quality_reason = check_image_quality(live_face_img)
+        # ── Live face ────────────────────────────────────────────────────────
+        live_faces = detect_faces(live_img, min_confidence=LIVE_FACE_MIN_CONFIDENCE)
+        if not live_faces:
+            logger.warning("No face detected in live frame shape=%s", live_img.shape)
+            return FaceMatchResult(False, 0.0, RejectionReason.NO_LIVE_FACE)
+        live_face = live_faces[0]
+        live_crop = crop_face(live_img, live_face["box"])
 
+        main_area = live_face["box"][2] * live_face["box"][3]
+        others = [f for f in live_faces[1:] if f["box"][2] * f["box"][3] >= SECOND_FACE_AREA_RATIO * main_area]
+        if others:
+            logger.warning("Live frame contains %d faces", 1 + len(others))
+            return FaceMatchResult(False, 0.0, RejectionReason.MULTIPLE_LIVE_FACES, live_crop)
+
+        # ── Alignment + quality ──────────────────────────────────────────────
+        doc_aligned = align_face(doc_img, doc_face["keypoints"])
+        live_aligned = align_face(live_img, live_face["keypoints"])
+
+        quality_ok, quality_reason = check_face_quality(live_aligned, live_face["keypoints"])
         if not quality_ok:
             logger.warning("Live face quality rejected: %s", quality_reason)
-            return False, 0.0
+            return FaceMatchResult(False, 0.0, RejectionReason.LOW_QUALITY_LIVE_FACE, live_crop)
 
-        # ----------------------------------------------------
-        # SAVE LIVE IMAGE
-        # ----------------------------------------------------
-
-        live_temp_path = save_temp_image(live_face_img)
-
-        # ----------------------------------------------------
-        # FACE VALIDATION
-        # ----------------------------------------------------
-
-        if not validate_single_face(document_face_path):
-            logger.warning("Document face validation failed for %s", document_face_path)
-            return False, 0.0
-
-        if not validate_single_face(live_temp_path):
-            logger.warning("Live face validation failed for %s", live_temp_path)
-            return False, 0.0
-
-        # ----------------------------------------------------
-        # GENERATE EMBEDDINGS
-        # ----------------------------------------------------
-
-        doc_embedding = generate_embedding(document_face_path)
-
-        if doc_embedding is None:
-            logger.warning("Document face embedding failed for %s", document_face_path)
-            return False, 0.0
-
-        live_embedding = generate_embedding(live_temp_path)
-
-        if live_embedding is None:
-            logger.warning("Live face embedding failed for %s", live_temp_path)
-            return False, 0.0
-
-        # ----------------------------------------------------
-        # SIMILARITY
-        # ----------------------------------------------------
-
-        similarity = cosine_similarity(
-            doc_embedding,
-            live_embedding
-        )
-
-        similarity = max(0.0, min(1.0, similarity))
+        # ── Embeddings + similarity ──────────────────────────────────────────
+        similarity = cosine_similarity(generate_embedding(doc_aligned), generate_embedding(live_aligned))
+        verified = similarity >= SIMILARITY_THRESHOLD
 
         logger.info(
-            "Face similarity=%.4f distance=%.4f threshold=%.4f model=%s embedding_detector=skip",
+            "Face similarity=%.4f threshold=%.4f model=%s verified=%s doc_conf=%.3f live_conf=%.3f",
             similarity,
-            cosine_distance_from_similarity(similarity),
             SIMILARITY_THRESHOLD,
             FACE_MODEL,
+            verified,
+            doc_face["confidence"],
+            live_face["confidence"],
         )
 
-        # ----------------------------------------------------
-        # FINAL DECISION
-        # ----------------------------------------------------
+        return FaceMatchResult(
+            verified=verified,
+            similarity=max(0.0, min(1.0, similarity)),
+            rejection_reason=None if verified else RejectionReason.FACE_MISMATCH,
+            live_face_crop=live_crop,
+        )
 
-        verified = similarity >= SIMILARITY_THRESHOLD
-        logger.info("Verified: %s", verified)
-
-        return verified, similarity
-
-    except Exception as exc:
-
+    except Exception:
         logger.exception("Verification failed")
-
-        return False, 0.0
-
-    finally:
-
-        if live_temp_path and os.path.exists(live_temp_path):
-            os.remove(live_temp_path)
-
-# ============================================================
-# OPTIONAL FALLBACK
-# ============================================================
-
-def fallback_face_recognition(
-    document_face_path: str,
-    live_face_img: np.ndarray
-):
-
-    try:
-
-        import face_recognition
-
-        doc_img = face_recognition.load_image_file(
-            document_face_path
-        )
-
-        live_rgb = cv2.cvtColor(
-            live_face_img,
-            cv2.COLOR_BGR2RGB
-        )
-
-        doc_encodings = face_recognition.face_encodings(doc_img)
-        live_encodings = face_recognition.face_encodings(live_rgb)
-
-        if not doc_encodings or not live_encodings:
-            return False, 0.0
-
-        distance = face_recognition.face_distance(
-            [doc_encodings[0]],
-            live_encodings[0]
-        )[0]
-
-        similarity = 1.0 - float(distance)
-
-        verified = similarity >= 0.80
-
-        return verified, similarity
-
-    except Exception as exc:
-
-        logger.error(
-            "Fallback failed: %s",
-            exc
-        )
-
-        return False, 0.0
-
-# ============================================================
-# TEST
-# ============================================================
-
-if __name__ == "__main__":
-
-    logging.basicConfig(level=logging.INFO)
-
-    document_path = "document_face.jpg"
-
-    live_image = cv2.imread("live_face.jpg")
-
-    result = verify_faces(
-        document_path,
-        live_image
-    )
-
-    print("\nVerification Result:")
-    print(result)
+        return FaceMatchResult(False, 0.0, RejectionReason.FACE_MISMATCH)

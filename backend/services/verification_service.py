@@ -17,7 +17,7 @@ from models.verification import (
 )
 from services.face_service import check_liveness, verify_faces
 from database.mongodb import sessions_col, verifications_col
-from utils.image_processing import base64_to_numpy, extract_face_mtcnn, save_image
+from utils.image_processing import base64_to_numpy, save_image
 
 logger = logging.getLogger(__name__)
 
@@ -119,31 +119,31 @@ async def run_face_verification(
             session_id, liveness_from_frontend, server_live
         )
 
-    # ── Detect and save live face crop ────────────────────────────────────────
-    live_face_img = extract_face_mtcnn(live_img)
-    if live_face_img is None:
-        logger.warning("[%s] No face detected in live capture", session_id)
-        await _save_rejected_record(session_id, session, 0.0, liveness_ok, RejectionReason.NO_LIVE_FACE)
-        return _rejected_response(session_id, RejectionReason.NO_LIVE_FACE, liveness=liveness_ok)
-    logger.info("[%s] Live face crop shape=%s", session_id, live_face_img.shape)
-
-    live_face_path = save_image(live_face_img, "uploads/faces", prefix=f"live_{session_id}")
-    logger.info("[%s] Live face saved: %s", session_id, live_face_path)
-
-    # ── Face comparison ────────────────────────────────────────────────────────
     if not doc_face_path:
         logger.warning("[%s] No document face path in session", session_id)
         await _save_rejected_record(session_id, session, 0.0, liveness_ok, RejectionReason.NO_FACE_FOUND)
         return _rejected_response(session_id, RejectionReason.NO_FACE_FOUND, liveness=liveness_ok)
 
-    face_match, similarity = verify_faces(doc_face_path, live_face_img)
-    logger.info("[%s] Similarity: %.4f", session_id, similarity)
-    logger.info("[%s] Verified: %s", session_id, face_match)
+    # ── Face detection, alignment and comparison ──────────────────────────────
+    match = verify_faces(doc_face_path, live_img)
+    face_match, similarity = match.verified, match.similarity
+    logger.info(
+        "[%s] Face match=%s similarity=%.4f reason=%s",
+        session_id,
+        face_match,
+        similarity,
+        match.rejection_reason.value if match.rejection_reason else None,
+    )
+
+    live_face_path: Optional[str] = None
+    if match.live_face_crop is not None:
+        live_face_path = save_image(match.live_face_crop, "uploads/faces", prefix=f"live_{session_id}")
+        logger.info("[%s] Live face saved: %s", session_id, live_face_path)
 
     # ── Final decision ────────────────────────────────────────────────────────
     rejection_reason: Optional[RejectionReason] = None
-    if not face_match:
-        rejection_reason = RejectionReason.FACE_MISMATCH
+    if match.rejection_reason:
+        rejection_reason = match.rejection_reason
     elif not liveness_ok:
         rejection_reason = RejectionReason.LIVENESS_FAILED
     elif REQUIRE_DOCUMENT_CONFIDENCE_FOR_APPROVAL and doc_confidence < DOCUMENT_CONFIDENCE_THRESHOLD:

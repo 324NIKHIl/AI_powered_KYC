@@ -6,7 +6,7 @@ import { getVerificationDetail } from '../services/api'
 import ConfidenceMeter from '../components/ConfidenceMeter'
 import StatusBadge from '../components/StatusBadge'
 
-const FACE_SIMILARITY_THRESHOLD = 0.32
+const FACE_SIMILARITY_THRESHOLD = 0.40  // keep in sync with backend FACE_SIMILARITY_THRESHOLD
 
 export default function ResultPage() {
   const { sessionId }        = useParams()
