@@ -304,3 +304,6 @@ Final Decision:
 - Risk scoring engine
 - Multi-factor verification
 - Real-time video liveness (MediaPipe)
+
+
+Minor changes
