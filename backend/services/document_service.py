@@ -19,6 +19,8 @@ from models.verification import (
     DocumentUploadResponse,
 )
 from services.aadhaar_qr_service import process_aadhaar_qr
+from services.kyc.document_verification import verify_document
+from services.kyc.result import DocumentVerification
 from services.ocr_service import extract_text_full, parse_extracted_fields
 from utils.image_processing import (
     extract_face_mtcnn,
@@ -36,10 +38,12 @@ async def process_document(
     file_bytes: bytes,
     original_filename: str,
     session_id: str,
-) -> DocumentUploadResponse:
+) -> tuple[DocumentUploadResponse, DocumentVerification]:
     """
     Full document verification pipeline.
-    Steps: save → preprocess → OCR → parse → validate → face extract → score
+    Steps: save → preprocess → OCR → parse → validate → face extract → QR → evidence-based
+    verification → score. Returns the API response and the full verification (incl. the
+    server-side-only provider name, which is not part of the response).
     """
     # ── 1. Save upload ────────────────────────────────────────────────────────
     doc_dir  = os.path.join(UPLOAD_DIR, "documents")
@@ -60,12 +64,8 @@ async def process_document(
         dob=validate_dob(fields.dob),
         id_number=validate_id_number(fields.id_number, doc_type),
     )
-    logger.info(
-        "[%s] OCR fields=%s validation=%s",
-        session_id,
-        fields.model_dump(),
-        validation.model_dump(),
-    )
+    # Field values are personal data — log only which fields validated, never their contents
+    logger.info("[%s] OCR field validation=%s", session_id, validation.model_dump())
 
     # ── 5. Face extraction from document ─────────────────────────────────────
     face_img: Optional[np.ndarray] = extract_face_mtcnn(raw_img)
@@ -84,7 +84,17 @@ async def process_document(
         if not aadhaar_qr.found and doc_type == DocumentType.UNKNOWN:
             aadhaar_qr = None
 
-    # ── 7. Confidence score ───────────────────────────────────────────────────
+    if aadhaar_qr and aadhaar_qr.found and doc_type == DocumentType.UNKNOWN:
+        doc_type = DocumentType.AADHAAR   # a decoded Aadhaar QR identifies the document
+
+    # ── 7. Evidence-based verification (format → crypto/QR/MRZ → external → fraud analysis) ──
+    verification = await verify_document(
+        doc_type=doc_type, img=raw_img, lines=lines, full_text=full_text, fields=fields,
+        validation=validation, face_extracted=face_img is not None, aadhaar_qr=aadhaar_qr,
+        raw_bytes=file_bytes,
+    )
+
+    # ── 8. Confidence score ───────────────────────────────────────────────────
     confidence = _compute_document_confidence(validation, face_img is not None, doc_type)
     logger.info(
         "[%s] Document confidence=%.4f threshold=%.4f",
@@ -102,8 +112,9 @@ async def process_document(
         document_face_extracted=face_img is not None,
         document_face_path=face_path,
         aadhaar_qr=aadhaar_qr,
-        message=_build_message(confidence, validation, face_img is not None),
-    )
+        verification=verification.model_dump(mode="json"),
+        message=_build_message(confidence, validation, face_img is not None, verification),
+    ), verification
 
 
 async def process_aadhaar_qr_upload(
@@ -151,12 +162,22 @@ def _compute_document_confidence(
     return round(min(score, 1.0), 4)
 
 
-def _build_message(confidence: float, validation: FieldValidation, face_extracted: bool) -> str:
-    threshold = float(os.getenv("DOCUMENT_CONFIDENCE_THRESHOLD", "0.75"))
-    if confidence >= threshold:
-        return "Document verified successfully"
+def _build_message(
+    confidence: float,
+    validation: FieldValidation,
+    face_extracted: bool,
+    verification: DocumentVerification,
+) -> str:
+    """
+    A readable-document message — never "verified" unless the evidence engine says VALID.
+    (OCR confidence only says how well we READ the document, not whether it is authentic.)
+    """
+    if verification.status.value == "VALID":
+        return "Document authenticity confirmed"
+    if verification.status.value in ("INVALID", "SUSPICIOUS"):
+        return verification.summary
     if not validation.id_number:
-        return "ID number could not be validated"
+        return "Document read, but its ID number could not be validated. " + verification.summary
     if not face_extracted:
-        return "Document processed but no face detected — face verification may fail"
-    return f"Document verified with low confidence ({confidence:.0%})"
+        return "Document read, but no face was detected — face verification may fail. " + verification.summary
+    return verification.summary or f"Document read with {confidence:.0%} confidence"

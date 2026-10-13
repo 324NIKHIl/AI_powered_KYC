@@ -15,3 +15,7 @@ Without a certificate here, QR data is still decoded and cross-checked against
 the card, but its signature status is reported as `unverified`.
 
 The folder can be changed with the `UIDAI_CERT_DIR` environment variable.
+
+You can also point `AADHAAR_CERTIFICATE_PATH` at a single certificate file. Staging/test certificates are
+ignored on purpose: they cannot verify real cards and would wrongly flag genuine ones. A QR whose signature
+cannot be checked is reported as *unverified* → the document status is `VERIFICATION_UNAVAILABLE`, not valid.
