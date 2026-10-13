@@ -45,38 +45,45 @@ async def face_verify(payload: FaceVerifyRequest):
             session_id=payload.session_id,
             live_face_b64=payload.live_face_base64,
             liveness_from_frontend=payload.liveness_verified,
+            extra_frames_b64=payload.extra_frames_base64,
         )
     except Exception as exc:
         logger.exception("[%s] Face verification failed", payload.session_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Face verification failed: {str(exc)}",
+            detail="Face verification failed due to a processing error. Please retry.",
         ) from exc
 
-    logger.info("[%s] Face verify response=%s", payload.session_id, result.model_dump())
+    logger.info("[%s] Face verify complete kyc_status=%s", payload.session_id, result.kyc_status)
     return result
 
 
 @router.post(
     "/liveness-check",
-    summary="Quick server-side liveness check (gradient analysis)",
+    summary="Server-side presentation-attack (liveness) analysis of one or more frames",
 )
 async def liveness_check(payload: dict):
     """
-    Accepts { "frame_base64": "<base64 image>" }
-    Returns { "is_live": bool, "confidence": float }
+    Accepts { "frame_base64": "<base64 image>", "extra_frames_base64": [...optional...] }
+    Returns { "status": PASS|FAIL|UNCERTAIN, "is_live": bool, "attack_score": float, ... }
     """
+    from services.kyc.liveness import LivenessStatus, assess_liveness
     from utils.image_processing import base64_to_numpy
-    from services.face_service import check_liveness
 
     b64 = payload.get("frame_base64", "")
-    if not b64:
+    if not b64 or not isinstance(b64, str):
         raise HTTPException(status_code=400, detail="frame_base64 is required")
+    extras = payload.get("extra_frames_base64") or []
+    if not isinstance(extras, list) or len(extras) > 8:
+        raise HTTPException(status_code=400, detail="extra_frames_base64 must be a list of at most 8 frames")
     try:
         img = base64_to_numpy(b64)
-        is_live, confidence = check_liveness(img)
-        logger.info("Liveness API result live=%s confidence=%.4f shape=%s", is_live, confidence, img.shape)
-        return {"is_live": is_live, "confidence": round(confidence, 4)}
-    except Exception as exc:
+        extra_imgs = [base64_to_numpy(e) for e in extras if isinstance(e, str)]
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not decode the image")
+    try:
+        result = assess_liveness(img, None, extra_imgs)
+    except Exception:
         logger.exception("Liveness check failed")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail="Liveness check failed")
+    return {**result.to_dict(), "is_live": result.status == LivenessStatus.PASS}

@@ -20,7 +20,8 @@ frontend/dist/
 .vite/
 frontend/node_modules/.vite/
 
-# Runtime uploads / generated files
+# Runtime uploads / generated files — contain identity documents and faces (personal data)
+backend/uploads/
 *.log
 
 # OS / editor

@@ -8,7 +8,9 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from typing import Annotated
+
+from pydantic import BaseModel, Field, StringConstraints
 
 
 # ── Enums ─────────────────────────────────────────────────────────────────────
@@ -17,6 +19,9 @@ class DocumentType(str, Enum):
     AADHAAR    = "aadhaar"
     PAN        = "pan"
     PASSPORT   = "passport"
+    DRIVING_LICENCE = "driving_licence"
+    CITIZENSHIP     = "citizenship"
+    EDUCATION       = "education"
     COLLEGE_ID = "college_id"
     UNKNOWN    = "unknown"
 
@@ -38,10 +43,23 @@ class RejectionReason(str, Enum):
     LOW_QUALITY_LIVE_FACE   = "Live face image quality too low — please retake in good lighting, facing the camera"
     FACE_PROCESSING_ERROR   = "Face comparison failed due to a processing error — please retry"
     DOCUMENT_TAMPERED       = "Document appears tampered — it does not match the UIDAI-signed Aadhaar QR code"
+    DOCUMENT_INVALID        = "Document failed validation"
+    DOCUMENT_SUSPICIOUS     = "Document shows signs of manipulation or inconsistent data"
+    PRESENTATION_ATTACK     = "Live capture looks like a screen, print or replay rather than a live person"
+    FACE_ALTERED            = "Live capture shows signs of face manipulation or synthesis"
     NONE                    = ""
 
 
 # ── Sub-models ────────────────────────────────────────────────────────────────
+
+class KycStatus(str, Enum):
+    """Final identity decision. VERIFIED requires every required evidence layer to succeed."""
+    VERIFIED                 = "VERIFIED"
+    REJECTED                 = "REJECTED"
+    SUSPICIOUS               = "SUSPICIOUS"
+    VERIFICATION_UNAVAILABLE = "VERIFICATION_UNAVAILABLE"
+    MANUAL_REVIEW_REQUIRED   = "MANUAL_REVIEW_REQUIRED"
+
 
 class ExtractedFields(BaseModel):
     name:      Optional[str] = None
@@ -78,6 +96,11 @@ class AadhaarQrResult(BaseModel):
     message:             str = ""
 
 
+class AadhaarQrUploadResponse(AadhaarQrResult):
+    """QR result plus the recomputed document verification (the QR changes the evidence)."""
+    verification: Optional[dict[str, Any]] = None
+
+
 # ── API Request / Response Models ─────────────────────────────────────────────
 
 class DocumentUploadResponse(BaseModel):
@@ -89,13 +112,20 @@ class DocumentUploadResponse(BaseModel):
     document_face_extracted:  bool
     document_face_path:       Optional[str] = None
     aadhaar_qr:               Optional[AadhaarQrResult] = None
+    # Unified, evidence-based verification result (see services/kyc/result.py)
+    verification:             Optional[dict[str, Any]] = None
     message:                  str
 
 
 class FaceVerifyRequest(BaseModel):
     session_id:        str
-    live_face_base64:  str   # base64-encoded JPEG
+    live_face_base64:  Annotated[str, StringConstraints(max_length=14_000_000)]   # base64-encoded JPEG (~10 MB)
+    # Advisory only: the browser's challenge result can make the decision stricter, never looser
     liveness_verified: bool = False
+    # Optional short burst of extra frames (base64 JPEG) enabling temporal replay/static-image checks
+    extra_frames_base64: list[Annotated[str, StringConstraints(max_length=14_000_000)]] = Field(
+        default_factory=list, max_length=8
+    )
 
 
 class FaceVerifyResponse(BaseModel):
@@ -113,6 +143,14 @@ class FaceVerifyResponse(BaseModel):
     qr_face_similarity:          Optional[float] = None
     document_qr_face_similarity: Optional[float] = None
     tamper_flags:     list[str] = Field(default_factory=list)
+    # ── Unified decision (the authoritative fields; `verified`/`final_decision` are legacy) ──
+    kyc_status:       Optional[KycStatus] = None
+    face_match_status: Optional[str] = None            # MATCH | NO_MATCH | UNCERTAIN
+    liveness:         Optional[dict[str, Any]] = None
+    deepfake:         Optional[dict[str, Any]] = None
+    risk_score:       Optional[float] = None
+    reasons:          list[str] = Field(default_factory=list)
+    face_thresholds:  Optional[dict[str, float]] = None
 
 
 # ── MongoDB Document Schema (stored record) ───────────────────────────────────

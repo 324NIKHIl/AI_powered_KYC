@@ -73,6 +73,8 @@ class FaceMatchResult:
     aligned_pair: Optional[np.ndarray] = None
     # Kept so the selfie can also be compared against other references (e.g. the Aadhaar QR photo)
     live_embedding: Optional[np.ndarray] = None
+    # (x, y, w, h) of the detected live face in the full frame — used by liveness / alteration analysis
+    live_face_box: Optional[list] = None
 
 
 # ============================================================
@@ -262,7 +264,8 @@ def verify_faces(document_face_path: str, live_img: np.ndarray) -> FaceMatchResu
         others = [f for f in live_faces[1:] if f["box"][2] * f["box"][3] >= SECOND_FACE_AREA_RATIO * main_area]
         if others:
             logger.warning("Live frame contains %d faces", 1 + len(others))
-            return FaceMatchResult(False, 0.0, RejectionReason.MULTIPLE_LIVE_FACES, live_crop)
+            return FaceMatchResult(False, 0.0, RejectionReason.MULTIPLE_LIVE_FACES, live_crop,
+                                   live_face_box=list(live_face["box"]))
 
         # ── Alignment + quality ──────────────────────────────────────────────
         live_aligned = align_face(live_img, live_face["keypoints"])
@@ -270,7 +273,8 @@ def verify_faces(document_face_path: str, live_img: np.ndarray) -> FaceMatchResu
         quality_ok, quality_reason = check_face_quality(live_aligned, live_face["keypoints"])
         if not quality_ok:
             logger.warning("Live face quality rejected: %s", quality_reason)
-            return FaceMatchResult(False, 0.0, RejectionReason.LOW_QUALITY_LIVE_FACE, live_crop)
+            return FaceMatchResult(False, 0.0, RejectionReason.LOW_QUALITY_LIVE_FACE, live_crop,
+                                   live_face_box=list(live_face["box"]))
 
         live_input = normalize_domain(live_aligned)
         aligned_pair = np.hstack([doc_input, live_input])
@@ -295,6 +299,7 @@ def verify_faces(document_face_path: str, live_img: np.ndarray) -> FaceMatchResu
             live_face_crop=live_crop,
             aligned_pair=aligned_pair,
             live_embedding=live_embedding,
+            live_face_box=list(live_face["box"]),
         )
 
     except Exception:

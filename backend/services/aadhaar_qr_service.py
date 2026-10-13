@@ -176,10 +176,17 @@ def _decimal_to_bytes(digits: str) -> bytes:
     return value.to_bytes((value.bit_length() + 7) // 8, "big")
 
 
+MAX_DECOMPRESSED_BYTES = 2_000_000   # a real Secure QR expands to a few KB; cap it against zip bombs
+
+
 def _decompress(raw: bytes) -> bytes:
     for wbits in (16 + zlib.MAX_WBITS, zlib.MAX_WBITS, -zlib.MAX_WBITS):  # gzip, zlib, raw deflate
         try:
-            return zlib.decompress(raw, wbits)
+            decoder = zlib.decompressobj(wbits)
+            out = decoder.decompress(raw, MAX_DECOMPRESSED_BYTES)
+            if decoder.unconsumed_tail:
+                raise ValueError("QR payload expands to an implausible size")
+            return out
         except zlib.error:
             continue
     raise ValueError("QR payload is not compressed Aadhaar data")
@@ -275,7 +282,11 @@ def is_staging_certificate(subject: str) -> bool:
 
 def _load_uidai_keys() -> list[tuple[str, Any]]:
     keys = []
-    for path in sorted(glob.glob(os.path.join(UIDAI_CERT_DIR, "*"))):
+    paths = sorted(glob.glob(os.path.join(UIDAI_CERT_DIR, "*")))
+    single = os.getenv("AADHAAR_CERTIFICATE_PATH", "").strip()   # optional: one explicit certificate file
+    if single and single not in paths:
+        paths.append(single)
+    for path in paths:
         if not path.lower().endswith((".cer", ".crt", ".pem", ".der")):
             continue
         with open(path, "rb") as fh:

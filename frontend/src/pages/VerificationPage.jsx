@@ -8,6 +8,7 @@ import ProgressSteps from '../components/ProgressSteps'
 import DocumentUpload from '../components/DocumentUpload'
 import WebcamCapture from '../components/WebcamCapture'
 import ConfidenceMeter from '../components/ConfidenceMeter'
+import VerificationBreakdown from '../components/VerificationBreakdown'
 
 export default function VerificationPage() {
   const { state, dispatch } = useVerification()
@@ -26,16 +27,10 @@ export default function VerificationPage() {
   // ── Step 1 → 2: Upload document ─────────────────────────────────────────
   async function handleDocumentSubmit() {
     if (!selectedFile) return
-    console.log('[VerificationPage] document submit', {
-      fileName: selectedFile.name,
-      fileType: selectedFile.type,
-      fileSize: selectedFile.size,
-    })
     setUploading(true)
     dispatch({ type: 'SET_LOADING', payload: true })
     try {
       const result = await uploadDocument(selectedFile, '', (pct) => setUploadProgress(pct))
-      console.log('[VerificationPage] document result', result)
       dispatch({ type: 'DOCUMENT_SUCCESS', payload: result })
     } catch (err) {
       dispatch({ type: 'SET_ERROR', payload: err.message })
@@ -51,17 +46,11 @@ export default function VerificationPage() {
   }
 
   // ── Step 3 → 5: Face verify ─────────────────────────────────────────────
-  async function handleFaceCapture({ base64, livenessVerified }) {
-    console.log('[VerificationPage] face capture', {
-      sessionId: state.sessionId,
-      livenessVerified,
-      payloadChars: base64?.length ?? 0,
-    })
+  async function handleFaceCapture({ base64, livenessVerified, extraFrames = [] }) {
     dispatch({ type: 'SET_STEP', payload: 4 })
     setProcessingFace(true)
     try {
-      const result = await verifyFace(state.sessionId, base64, livenessVerified)
-      console.log('[VerificationPage] face result', result)
+      const result = await verifyFace(state.sessionId, base64, livenessVerified, extraFrames)
       dispatch({ type: 'FACE_SUCCESS', payload: result })
       navigate(`/result/${state.sessionId}`)
     } catch (err) {
@@ -144,7 +133,7 @@ export default function VerificationPage() {
 
               {/* Confidence meter + fields */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
-                <ConfidenceMeter score={state.documentResult.document_confidence_score} label="Doc Score" />
+                <ConfidenceMeter score={state.documentResult.document_confidence_score} label="OCR read confidence" />
 
                 <div className="md:col-span-2 space-y-3">
                   {[
@@ -173,6 +162,8 @@ export default function VerificationPage() {
                 </span>
               </div>
             </div>
+
+            <VerificationBreakdown verification={state.documentResult.verification} />
 
             {/* Aadhaar back side / QR — shown before "Next" so it isn't missed.
                 Also offered for unknown documents in case type detection missed an Aadhaar. */}

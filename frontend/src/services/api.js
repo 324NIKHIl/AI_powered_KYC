@@ -8,7 +8,7 @@ const api = axios.create({
 // ── Interceptors ─────────────────────────────────────────────────────────────
 api.interceptors.response.use(
   (res) => {
-    console.log('[API RESPONSE]', res.config?.method?.toUpperCase(), res.config?.url, res.data)
+    console.log('[API RESPONSE]', res.config?.method?.toUpperCase(), res.config?.url, res.status)
     return res
   },
   (err) => {
@@ -24,7 +24,7 @@ api.interceptors.response.use(
     } else if (err.code === 'ENOTFOUND' || err.code === 'ECONNREFUSED') {
       message = 'Cannot connect to server. Make sure the backend is running.'
     }
-    console.error('[API ERROR]', err.config?.method?.toUpperCase(), err.config?.url, message, err.response?.data)
+    console.error('[API ERROR]', err.config?.method?.toUpperCase(), err.config?.url, err.response?.status, message)
     return Promise.reject(new Error(message))
   }
 )
@@ -38,12 +38,6 @@ api.interceptors.response.use(
  * @param {Function} [onProgress] - (percent: number) => void
  */
 export async function uploadDocument(file, sessionId = '', onProgress) {
-  console.log('[UPLOAD_DOCUMENT REQUEST]', {
-    name: file?.name,
-    type: file?.type,
-    size: file?.size,
-    sessionId,
-  })
   const form = new FormData()
   form.append('file', file)
   if (sessionId) form.append('session_id', sessionId)
@@ -59,7 +53,6 @@ export async function uploadDocument(file, sessionId = '', onProgress) {
         if (onProgress && e.total) onProgress(Math.round((e.loaded / e.total) * 100))
       },
     })
-    console.log('[UPLOAD_DOCUMENT RESULT]', data)
     return data
   } catch (err) {
     if (err.name === 'AbortError') {
@@ -84,7 +77,6 @@ export async function uploadAadhaarQr(sessionId, file) {
   const { data } = await api.post('/upload-aadhaar-qr', form, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })
-  console.log('[UPLOAD_AADHAAR_QR RESULT]', data)
   return data
 }
 
@@ -96,20 +88,13 @@ export async function uploadAadhaarQr(sessionId, file) {
  * @param {string} liveFrameBase64 - base64 JPEG captured from webcam
  * @param {boolean} livenessVerified - whether frontend liveness challenge passed
  */
-export async function verifyFace(sessionId, liveFrameBase64, livenessVerified = false) {
-  console.log('[VERIFY_FACE REQUEST]', {
-    sessionId,
-    livenessVerified,
-    payloadChars: liveFrameBase64?.length ?? 0,
-  })
+export async function verifyFace(sessionId, liveFrameBase64, livenessVerified = false, extraFrames = []) {
   const { data } = await api.post('/face-verify', {
     session_id:        sessionId,
     live_face_base64:  liveFrameBase64,
     liveness_verified: livenessVerified,
+    extra_frames_base64: extraFrames,
   })
-  console.log('SIMILARITY:', data.similarity_score)
-  console.log('VERIFIED:', data.verified)
-  console.log('[VERIFY_FACE RESULT]', data)
   return data
 }
 
@@ -138,7 +123,6 @@ export async function getStats() {
 
 export async function getVerificationDetail(sessionId) {
   const { data } = await api.get(`/verification/${sessionId}`)
-  console.log('[RESULT_DETAIL]', data)
   return data
 }
 

@@ -63,6 +63,14 @@ export default function WebcamCapture({ onCapture, sessionId }) {
       return
     }
 
+    // Short burst of extra frames so the server can run temporal (static-image / replay) checks
+    const extraFrames = []
+    for (let i = 0; i < 4; i++) {
+      await new Promise((r) => setTimeout(r, 250))
+      const f = webcamRef.current?.getScreenshot({ width: 640, height: 480 })
+      if (f) extraFrames.push(f.split(',')[1])
+    }
+
     setCapturedImg(imageSrc)
     setCapturing(false)
 
@@ -73,7 +81,7 @@ export default function WebcamCapture({ onCapture, sessionId }) {
       livenessOk,
       payloadChars: base64.length,
     })
-    onCapture({ base64, livenessVerified: livenessOk })
+    onCapture({ base64, livenessVerified: livenessOk, extraFrames })
   }, [capturing, livenessOk, onCapture])
 
   const handleRetake = () => {

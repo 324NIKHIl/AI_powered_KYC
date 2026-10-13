@@ -5,6 +5,7 @@ Reader is initialised once (lazy singleton) to avoid per-request model loading.
 
 from __future__ import annotations
 
+import os
 import re
 import logging
 from difflib import SequenceMatcher
@@ -26,7 +27,9 @@ def _get_reader():
     if _reader is None:
         import easyocr
         logger.info("Initialising EasyOCR reader (first-time model load)…")
-        _reader = easyocr.Reader(["en"], gpu=False, verbose=False)
+        # OCR_LANGUAGES e.g. "en" (default) or "en,ne" to also read Devanagari (Nepali) text
+        languages = [l.strip() for l in os.getenv("OCR_LANGUAGES", "en").split(",") if l.strip()] or ["en"]
+        _reader = easyocr.Reader(languages, gpu=False, verbose=False)
         logger.info("EasyOCR ready")
     return _reader
 

@@ -515,3 +515,47 @@ INFO:     127.0.0.1:64354 - "POST /api/face-verify HTTP/1.1" 200 OK
 INFO:     127.0.0.1:64357 - "GET /api/verification/6ec8709a01d4497c8023e5243d3d0faf HTTP/1.1" 200 OK
 2026-09-27 22:38:58,771 INFO [api.routes.admin] [6ec8709a01d4497c8023e5243d3d0faf] Result detail response final_decision=REJECTED verified=False similarity=0.0 reason=Face comparison failed due to a processing error — please retry
 INFO:     127.0.0.1:64360 - "GET /api/verification/6ec8709a01d4497c8023e5243d3d0faf HTTP/1.1" 200 OK
+
+---
+
+## Evidence-based verification (v2)
+
+The system now distinguishes **"I read this document"** from **"I have evidence this document is authentic"**.
+OCR success, regex/format validity and MRZ check digits are *necessary but never sufficient*.
+
+```
+Upload → type detection → image quality → OCR → document-specific validation
+       → cryptographic / QR / MRZ → external provider → tamper analysis → decision engine
+```
+
+**Document status:** `VALID` · `INVALID` · `SUSPICIOUS` · `VERIFICATION_UNAVAILABLE` · `MANUAL_REVIEW_REQUIRED`
+**Final KYC status** (adds face match, liveness, face-alteration): `VERIFIED` · `REJECTED` · `SUSPICIOUS` · `VERIFICATION_UNAVAILABLE` · `MANUAL_REVIEW_REQUIRED`
+
+`VALID`/`VERIFIED` is reachable only via **authoritative evidence**: a verified UIDAI QR signature (Aadhaar), or a
+genuine, non-mock match from a configured external provider — plus the document's required local checks.
+Provider down / not configured ⇒ `VERIFICATION_UNAVAILABLE`, never "verified".
+
+| Document | Local layers | Authority |
+|---|---|---|
+| Aadhaar | number checksum, QR decode, RSA-SHA256 signature vs UIDAI cert, QR↔OCR, QR photo↔printed photo | UIDAI signature |
+| PAN | format + holder type, surname initial, independent PAN detection, layout | `PAN_*` provider |
+| Passport | OCR + ICAO 9303 MRZ (check digits, expiry), OCR↔MRZ comparison | `PASSPORT_*` provider |
+| Driving licence | number structure, state code, dates, layout | `DL_*` provider |
+| Citizenship | country-aware (`NepalCitizenshipVerifier`), plausibility checks | `CITIZENSHIP_*` provider (else "appears valid, not government-verified") |
+| 10th/12th result | structured extraction, marks arithmetic, board/year | `EDUCATION_*` provider |
+
+Code lives in `backend/services/kyc/` (`result.py` unified schema · `engine.py` decision rules ·
+`providers/` interfaces + generic REST + mock · `documents/` per-document verifiers · `liveness.py` ·
+`deepfake.py` · `identity.py` final decision). Configure providers in `backend/.env` (see `.env.example`);
+secrets never reach the frontend.
+
+**Limits you must know:** liveness and deepfake analysis are signal-processing *heuristics*, not trained
+anti-spoofing/deepfake models — they catch crude attacks (screen moiré, static/replayed frames, obvious blending)
+and flag the rest for review. Plug a certified PAD/deepfake model in behind `assess_liveness` /
+`assess_face_alteration` for production. The generic REST provider needs a real vendor contract (or a small
+adapter subclass) before PAN/passport/DL/citizenship/education can reach `VALID`.
+
+### Tests
+```bash
+cd backend && pip install -r requirements-dev.txt && pytest
+```
