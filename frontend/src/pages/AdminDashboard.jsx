@@ -193,7 +193,7 @@ export default function AdminDashboard() {
                         <ScorePill value={r.similarity_score} />
                       </td>
                       <td className="px-6 py-4 text-center">
-                        <StatusBadge status={r.final_decision} />
+                        <StatusBadge status={r.kyc_status || r.final_decision} />
                       </td>
                       <td className="px-6 py-4 text-xs text-white/30">
                         {r.created_at ? new Date(r.created_at).toLocaleDateString() : '—'}

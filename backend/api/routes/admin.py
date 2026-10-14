@@ -26,6 +26,10 @@ async def get_verification_history(
     page:    int = Query(default=1, ge=1),
     limit:   int = Query(default=20, ge=1, le=100),
     decision: Optional[str] = Query(default=None, description="Filter: APPROVED | REJECTED | PENDING"),
+    kyc_status: Optional[str] = Query(
+        default=None,
+        description="Filter: VERIFIED | REJECTED | SUSPICIOUS | VERIFICATION_UNAVAILABLE | MANUAL_REVIEW_REQUIRED",
+    ),
 ):
     from database.mongodb import verifications_col
 
@@ -34,8 +38,10 @@ async def get_verification_history(
     query: dict = {}
     if decision:
         query["final_decision"] = decision.upper()
+    if kyc_status:
+        query["kyc_status"] = kyc_status.upper()
 
-    cursor = col.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit)
+    cursor = col.find(query, {"_id": 0, "verification_provider": 0}).sort("created_at", -1).skip(skip).limit(limit)
     records = await cursor.to_list(length=limit)
     total   = await col.count_documents(query)
 
@@ -102,7 +108,7 @@ async def get_verification_detail(session_id: str):
     from database.mongodb import verifications_col
 
     col    = verifications_col()
-    record = await col.find_one({"session_id": session_id}, {"_id": 0})
+    record = await col.find_one({"session_id": session_id}, {"_id": 0, "verification_provider": 0})
     if not record:
         raise HTTPException(status_code=404, detail=f"Verification not found for session: {session_id}")
     logger.info(

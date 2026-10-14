@@ -12,18 +12,13 @@ const INITIAL = {
 
 /* ── Reducer ─────────────────────────────────────────────────────────────── */
 function reducer(state, action) {
-  console.log('[VERIFICATION DISPATCH]', action.type, action.payload)
+  console.log('[VERIFICATION DISPATCH]', action.type)
   switch (action.type) {
     case 'SET_LOADING':       return { ...state, loading: action.payload }
     case 'SET_ERROR':         return { ...state, error: action.payload, loading: false }
     case 'CLEAR_ERROR':       return { ...state, error: null }
     case 'SET_STEP':          return { ...state, step: action.payload }
     case 'DOCUMENT_SUCCESS':
-      console.log('[DOCUMENT_SUCCESS STATE]', {
-        sessionId: action.payload.session_id,
-        confidence: action.payload.document_confidence_score,
-        faceExtracted: action.payload.document_face_extracted,
-      })
       return {
         ...state,
         loading:        false,
@@ -32,15 +27,19 @@ function reducer(state, action) {
         documentResult: action.payload,
         step:           2,
       }
+    case 'QR_SUCCESS': {
+      const { verification, ...qr } = action.payload || {}
+      return {
+        ...state,
+        error:          null,
+        documentResult: {
+          ...state.documentResult,
+          aadhaar_qr: qr,
+          ...(verification ? { verification } : {}),
+        },
+      }
+    }
     case 'FACE_SUCCESS':
-      console.log('[FACE_SUCCESS STATE]', {
-        sessionId: action.payload.session_id,
-        verified: action.payload.verified,
-        status: action.payload.status,
-        finalDecision: action.payload.final_decision,
-        similarity: action.payload.similarity_score,
-        reason: action.payload.reason || action.payload.rejection_reason,
-      })
       return {
         ...state,
         loading:    false,

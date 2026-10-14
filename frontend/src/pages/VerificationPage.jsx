@@ -2,11 +2,13 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useVerification } from '../context/VerificationContext'
-import { uploadDocument, verifyFace } from '../services/api'
+import { uploadAadhaarQr, uploadDocument, verifyFace } from '../services/api'
+import AadhaarQrPanel from '../components/AadhaarQrPanel'
 import ProgressSteps from '../components/ProgressSteps'
 import DocumentUpload from '../components/DocumentUpload'
 import WebcamCapture from '../components/WebcamCapture'
 import ConfidenceMeter from '../components/ConfidenceMeter'
+import VerificationBreakdown from '../components/VerificationBreakdown'
 
 export default function VerificationPage() {
   const { state, dispatch } = useVerification()
@@ -18,20 +20,17 @@ export default function VerificationPage() {
   const [processingFace, setProcessingFace] = useState(false)
 
   const currentStep = state.step
+  const documentType = state.documentResult?.document_type
+  const showQrPanel = ['aadhaar', 'unknown'].includes(documentType) || Boolean(state.documentResult?.aadhaar_qr)
+  const qrPending = showQrPanel && !state.documentResult?.aadhaar_qr?.found
 
   // ── Step 1 → 2: Upload document ─────────────────────────────────────────
   async function handleDocumentSubmit() {
     if (!selectedFile) return
-    console.log('[VerificationPage] document submit', {
-      fileName: selectedFile.name,
-      fileType: selectedFile.type,
-      fileSize: selectedFile.size,
-    })
     setUploading(true)
     dispatch({ type: 'SET_LOADING', payload: true })
     try {
       const result = await uploadDocument(selectedFile, '', (pct) => setUploadProgress(pct))
-      console.log('[VerificationPage] document result', result)
       dispatch({ type: 'DOCUMENT_SUCCESS', payload: result })
     } catch (err) {
       dispatch({ type: 'SET_ERROR', payload: err.message })
@@ -40,18 +39,18 @@ export default function VerificationPage() {
     }
   }
 
+  // ── Step 2 (optional): Aadhaar QR side ──────────────────────────────────
+  async function handleQrUpload(file) {
+    const result = await uploadAadhaarQr(state.sessionId, file)
+    dispatch({ type: 'QR_SUCCESS', payload: result })
+  }
+
   // ── Step 3 → 5: Face verify ─────────────────────────────────────────────
-  async function handleFaceCapture({ base64, livenessVerified }) {
-    console.log('[VerificationPage] face capture', {
-      sessionId: state.sessionId,
-      livenessVerified,
-      payloadChars: base64?.length ?? 0,
-    })
+  async function handleFaceCapture({ base64, livenessVerified, extraFrames = [] }) {
     dispatch({ type: 'SET_STEP', payload: 4 })
     setProcessingFace(true)
     try {
-      const result = await verifyFace(state.sessionId, base64, livenessVerified)
-      console.log('[VerificationPage] face result', result)
+      const result = await verifyFace(state.sessionId, base64, livenessVerified, extraFrames)
       dispatch({ type: 'FACE_SUCCESS', payload: result })
       navigate(`/result/${state.sessionId}`)
     } catch (err) {
@@ -134,7 +133,7 @@ export default function VerificationPage() {
 
               {/* Confidence meter + fields */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
-                <ConfidenceMeter score={state.documentResult.document_confidence_score} label="Doc Score" />
+                <ConfidenceMeter score={state.documentResult.document_confidence_score} label="OCR read confidence" />
 
                 <div className="md:col-span-2 space-y-3">
                   {[
@@ -162,11 +161,22 @@ export default function VerificationPage() {
                     : 'No face detected — face match may fail'}
                 </span>
               </div>
-
-              <button onClick={() => dispatch({ type: 'SET_STEP', payload: 3 })} className="btn-primary w-full">
-                Next: Live Face Capture →
-              </button>
             </div>
+
+            <VerificationBreakdown verification={state.documentResult.verification} />
+
+            {/* Aadhaar back side / QR — shown before "Next" so it isn't missed.
+                Also offered for unknown documents in case type detection missed an Aadhaar. */}
+            {showQrPanel && (
+              <AadhaarQrPanel qr={state.documentResult.aadhaar_qr} onUpload={handleQrUpload} />
+            )}
+
+            <button
+              onClick={() => dispatch({ type: 'SET_STEP', payload: 3 })}
+              className={qrPending ? 'btn-secondary w-full' : 'btn-primary w-full'}
+            >
+              {qrPending ? 'Skip QR check — continue to Live Face Capture →' : 'Next: Live Face Capture →'}
+            </button>
           </motion.div>
         )}
 
