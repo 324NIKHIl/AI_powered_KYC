@@ -3,10 +3,26 @@ import { useParams, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { useVerification } from '../context/VerificationContext'
 import { getVerificationDetail } from '../services/api'
+import AadhaarQrPanel from '../components/AadhaarQrPanel'
 import ConfidenceMeter from '../components/ConfidenceMeter'
 import StatusBadge from '../components/StatusBadge'
+import VerificationBreakdown from '../components/VerificationBreakdown'
 
-const FACE_SIMILARITY_THRESHOLD = 0.32
+const LEGACY = { APPROVED: 'VERIFIED', REJECTED: 'REJECTED', PENDING: 'MANUAL_REVIEW_REQUIRED' }
+const TITLES = {
+  VERIFIED: 'Identity Verified',
+  REJECTED: 'Verification Rejected',
+  SUSPICIOUS: 'Suspicious — flagged',
+  VERIFICATION_UNAVAILABLE: 'Verification Unavailable',
+  MANUAL_REVIEW_REQUIRED: 'Manual Review Required',
+}
+const TONES = {
+  green: { border: 'border-success/40', bg: 'bg-success/20', text: 'text-success', glow: 'rgba(16,185,129,0.3)' },
+  red:   { border: 'border-danger/40',  bg: 'bg-danger/20',  text: 'text-danger',  glow: 'rgba(239,68,68,0.3)' },
+  amber: { border: 'border-warning/40', bg: 'bg-warning/20', text: 'text-warning', glow: 'rgba(245,158,11,0.3)' },
+}
+const toneFor = (st) => (st === 'VERIFIED' ? TONES.green : st === 'REJECTED' || st === 'SUSPICIOUS' ? TONES.red : TONES.amber)
+const ICON = { VERIFIED: '✅', REJECTED: '❌', SUSPICIOUS: '🚩', VERIFICATION_UNAVAILABLE: '⚠️', MANUAL_REVIEW_REQUIRED: '🕵️' }
 
 export default function ResultPage() {
   const { sessionId }        = useParams()
@@ -21,7 +37,6 @@ export default function ResultPage() {
       try {
         setLoading(true)
         const data = await getVerificationDetail(sessionId)
-        console.log('[ResultPage] loaded result', data)
         setRecord(data)
       } catch (err) {
         setError(err.message)
@@ -53,20 +68,17 @@ export default function ResultPage() {
     )
   }
 
-  const isApproved  = record.verified === true || record.status === 'approved' || record.final_decision === 'APPROVED'
+  const kycStatus  = record.kyc_status || LEGACY[record.final_decision] || 'MANUAL_REVIEW_REQUIRED'
+  const tone        = toneFor(kycStatus)
   const simScore    = record.similarity_score ?? 0
   const docScore    = record.document_confidence_score ?? 0
-  const reason      = record.reason || record.rejection_reason
+  const reasons     = record.reasons?.length ? record.reasons : (record.reason || record.rejection_reason ? [record.reason || record.rejection_reason] : [])
   const fields      = record.extracted_fields ?? {}
   const validation  = record.field_validation ?? {}
-  console.log('[ResultPage] render decision', {
-    verified: record.verified,
-    status: record.status,
-    finalDecision: record.final_decision,
-    isApproved,
-    similarity: simScore,
-    reason,
-  })
+  const thresholds  = record.face_thresholds
+  const faceStatus  = record.face_match_status || (record.face_match ? 'MATCH' : record.face_match === false ? 'NO_MATCH' : null)
+  const liveness    = record.liveness
+  const deepfake    = record.deepfake
 
   return (
     <div className="min-h-screen py-12 px-4">
@@ -76,38 +88,37 @@ export default function ResultPage() {
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
-          className={`glass-card p-10 text-center border-2 ${isApproved ? 'border-success/40' : 'border-danger/40'}`}
+          className={`glass-card p-10 text-center border-2 ${tone.border}`}
         >
-          {/* Animated icon */}
           <motion.div
             initial={{ scale: 0 }}
             animate={{ scale: 1 }}
             transition={{ type: 'spring', stiffness: 300, delay: 0.2 }}
-            className={`w-24 h-24 rounded-full mx-auto mb-6 flex items-center justify-center text-5xl ${isApproved ? 'bg-success/20' : 'bg-danger/20'}`}
-            style={{ boxShadow: isApproved ? '0 0 40px rgba(16,185,129,0.3)' : '0 0 40px rgba(239,68,68,0.3)' }}
+            className={`w-24 h-24 rounded-full mx-auto mb-6 flex items-center justify-center text-5xl ${tone.bg}`}
+            style={{ boxShadow: `0 0 40px ${tone.glow}` }}
           >
-            {isApproved ? '✅' : '❌'}
+            {ICON[kycStatus]}
           </motion.div>
 
-          <h1 className={`text-4xl font-extrabold mb-3 ${isApproved ? 'text-success' : 'text-danger'}`}>
-            Verification {record.final_decision}
-          </h1>
+          <h1 className={`text-4xl font-extrabold mb-3 ${tone.text}`}>{TITLES[kycStatus] || kycStatus}</h1>
 
-          {reason && (
-            <p className="text-white/50 text-sm mb-4">Reason: {reason}</p>
+          {reasons.length > 0 && (
+            <ul className="text-white/50 text-sm mb-4 space-y-1">
+              {reasons.map((r, i) => <li key={i}>{r}</li>)}
+            </ul>
           )}
 
-          <StatusBadge status={record.final_decision} large />
+          <StatusBadge status={kycStatus} large />
 
           <p className="text-white/30 text-xs mt-4 font-mono">Session: {sessionId}</p>
         </motion.div>
 
         {/* ── Scores row ──────────────────────────────────────────────────── */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <ScoreCard label="Document Score"  value={docScore}  color="primary" />
-          <ScoreCard label="Face Similarity" value={simScore}  color={simScore >= FACE_SIMILARITY_THRESHOLD ? 'success' : 'danger'} />
-          <BoolCard  label="Face Match"     value={record.face_match} />
-          <BoolCard  label="Liveness"       value={record.liveness_verified} />
+          <ScoreCard label="OCR Read Confidence" value={docScore} color="primary" />
+          <ScoreCard label="Face Similarity" value={simScore} color={faceStatus === 'MATCH' ? 'success' : faceStatus === 'UNCERTAIN' ? 'primary' : 'danger'} />
+          <TriCard label="Face Match" value={faceStatus} />
+          <TriCard label="Liveness" value={liveness?.status ?? (record.liveness_verified ? 'PASS' : null)} />
         </div>
 
         {/* ── Detailed breakdown ──────────────────────────────────────────── */}
@@ -137,20 +148,59 @@ export default function ResultPage() {
           <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.4 }} className="glass-card p-6 flex flex-col items-center justify-center gap-8">
             <div className="flex gap-8 justify-center">
               <div className="text-center">
-                <ConfidenceMeter score={docScore} label="Doc Confidence" size={140} />
+                <ConfidenceMeter score={docScore} label="OCR Read Confidence" size={140} />
               </div>
               <div className="text-center">
                 <ConfidenceMeter score={simScore} label="Face Similarity" size={140} />
               </div>
             </div>
             <div className="text-center space-y-1">
-              <p className="text-xs text-white/30">Threshold for approval: Face ≥ 32%</p>
+              {thresholds && (
+                <p className="text-xs text-white/30">
+                  Face match ≥ {Math.round(thresholds.face_match * 100)}% · no match &lt; {Math.round(thresholds.face_no_match * 100)}%
+                </p>
+              )}
               <p className="text-xs text-white/20 font-mono">
                 {new Date(record.created_at).toLocaleString()}
               </p>
             </div>
           </motion.div>
         </div>
+
+        {/* ── Document verification ───────────────────────────────────────── */}
+        <VerificationBreakdown verification={record.document_verification} />
+
+        {/* ── Identity checks ─────────────────────────────────────────────── */}
+        <div className="glass-card p-6 space-y-4">
+          <h2 className="font-bold text-lg">Identity checks</h2>
+          <CheckRow
+            label="Face match"
+            value={faceStatus}
+            detail={`Similarity ${Math.round(simScore * 100)}%` + (thresholds ? ` (match ≥ ${Math.round(thresholds.face_match * 100)}%, no match < ${Math.round(thresholds.face_no_match * 100)}%)` : '')}
+          />
+          <CheckRow label="Liveness" value={liveness?.status} detail={liveness?.reasons?.join('; ')} />
+          <CheckRow
+            label="Face alteration / deepfake analysis (heuristic)"
+            value={deepfake?.level}
+            detail={deepfake?.reasons?.join('; ') || 'Heuristic signals only — a low score does not prove the face is genuine'}
+          />
+          <div className="flex justify-between pt-3 border-t border-white/10 text-sm">
+            <span className="text-white/40">Overall risk score</span>
+            <span className="font-mono">{record.risk_score != null ? `${Math.round(record.risk_score * 100)}%` : '—'}</span>
+          </div>
+        </div>
+
+        {/* ── Aadhaar Secure QR ───────────────────────────────────────────── */}
+        {record.aadhaar_qr && (
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }}>
+            <AadhaarQrPanel
+              qr={record.aadhaar_qr}
+              qrFaceSimilarity={record.qr_face_similarity}
+              documentQrFaceSimilarity={record.document_qr_face_similarity}
+              tamperFlags={record.tamper_flags}
+            />
+          </motion.div>
+        )}
 
         {/* ── Actions ──────────────────────────────────────────────────────── */}
         <div className="flex flex-col sm:flex-row gap-4 justify-center">
@@ -178,11 +228,29 @@ function ScoreCard({ label, value, color }) {
   )
 }
 
-function BoolCard({ label, value }) {
+const TRI_TONE = {
+  MATCH: 'text-success', PASS: 'text-success', LOW: 'text-success',
+  UNCERTAIN: 'text-warning', REVIEW: 'text-warning',
+  NO_MATCH: 'text-danger', FAIL: 'text-danger', HIGH: 'text-danger',
+}
+
+function TriCard({ label, value }) {
   return (
     <div className="glass-card p-4 text-center">
-      <p className={`text-2xl font-bold ${value ? 'text-success' : 'text-danger'}`}>{value ? 'PASS' : 'FAIL'}</p>
+      <p className={`text-xl font-bold ${TRI_TONE[value] || 'text-white/40'}`}>{value ? value.replace(/_/g, ' ') : 'N/A'}</p>
       <p className="text-white/40 text-xs mt-1">{label}</p>
+    </div>
+  )
+}
+
+function CheckRow({ label, value, detail }) {
+  return (
+    <div className="flex items-start gap-3 text-sm">
+      <span className={`w-28 flex-shrink-0 font-semibold ${TRI_TONE[value] || 'text-white/40'}`}>{value ? value.replace(/_/g, ' ') : 'N/A'}</span>
+      <div className="min-w-0">
+        <p className="text-white/80">{label}</p>
+        {detail && <p className="text-xs text-white/40 break-words">{detail}</p>}
+      </div>
     </div>
   )
 }

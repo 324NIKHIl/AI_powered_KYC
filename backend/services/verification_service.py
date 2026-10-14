@@ -6,18 +6,30 @@ then persists the result to MongoDB.
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
 from models.verification import (
     FaceVerifyResponse,
+    KycStatus,
+    QrSignatureStatus,
     RejectionReason,
     VerificationStatus,
 )
-from services.face_service import check_liveness, verify_faces
+from services.face_service import (
+    SIMILARITY_THRESHOLD,
+    cosine_similarity,
+    reference_embedding,
+    verify_faces,
+)
+from services.kyc.config import face_match_threshold, face_no_match_threshold
+from services.kyc.deepfake import assess_face_alteration
+from services.kyc.identity import FaceMatch, classify_similarity, decide_identity
+from services.kyc.liveness import LivenessStatus, assess_liveness
 from database.mongodb import sessions_col, verifications_col
-from utils.image_processing import base64_to_numpy, extract_face_mtcnn, save_image
+from utils.image_processing import base64_to_numpy, save_image
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +57,17 @@ async def create_session(session_id: str, extra: dict) -> None:
     )
 
 
+async def update_session(session_id: str, updates: dict) -> None:
+    await sessions_col().update_one({"session_id": session_id}, {"$set": updates})
+
+
+async def upsert_verification_fields(session_id: str, updates: dict) -> None:
+    await verifications_col().update_one(
+        {"session_id": session_id},
+        {"$set": {**updates, "updated_at": datetime.now(timezone.utc)}},
+    )
+
+
 async def get_session(session_id: str) -> Optional[dict]:
     col = sessions_col()
     return await col.find_one({"session_id": session_id}, {"_id": 0})
@@ -56,148 +79,200 @@ async def run_face_verification(
     session_id: str,
     live_face_b64: str,
     liveness_from_frontend: bool,
+    extra_frames_b64: Optional[list[str]] = None,
 ) -> FaceVerifyResponse:
     """
-    Full pipeline:
-    1. Decode live face from base64
-    2. Server-side liveness check
-    3. Compare against document face
-    4. Make APPROVED / REJECTED decision
-    5. Persist to MongoDB
+    Document verification (already done at upload) → live capture → liveness → face detection
+    → embedding → comparison → alteration analysis → final identity decision.
+
+    Everything is decided here, on the backend. The browser's liveness flag is advisory: it can
+    tighten the decision but never loosen it.
     """
-    # ── Load session ──────────────────────────────────────────────────────────
-    logger.info(
-        "[%s] Face verification started frontend_liveness=%s",
-        session_id,
-        liveness_from_frontend,
-    )
+    started = time.perf_counter()
+    logger.info("[%s] Face verification started frames=%d", session_id, 1 + len(extra_frames_b64 or []))
     session = await get_session(session_id)
     if not session:
         logger.warning("[%s] Session not found during face verification", session_id)
         return _face_response(
-            session_id=session_id,
-            verified=False,
-            similarity=0.0,
-            liveness=False,
+            session_id=session_id, verified=False, similarity=0.0, liveness=False,
             decision=VerificationStatus.REJECTED,
             reason="Session not found. Please upload a document first.",
         )
 
     doc_face_path: Optional[str] = session.get("document_face_path")
-    doc_confidence: float = float(session.get("document_confidence_score", 0.0))
-    logger.info(
-        "[%s] Session loaded doc_face_path=%s doc_confidence=%.4f doc_threshold=%.4f require_doc_confidence=%s",
-        session_id,
-        doc_face_path,
-        doc_confidence,
-        DOCUMENT_CONFIDENCE_THRESHOLD,
-        REQUIRE_DOCUMENT_CONFIDENCE_FOR_APPROVAL,
-    )
+    document_status: Optional[str] = session.get("document_status")
+    document_risk = float(session.get("document_risk", 0.0) or 0.0)
 
-    # ── Decode live face ──────────────────────────────────────────────────────
     try:
         live_img = base64_to_numpy(live_face_b64)
-    except Exception as exc:
-        logger.error("[%s] Live face decode failed: %s", session_id, exc)
+    except Exception:
+        logger.error("[%s] Live face decode failed", session_id)
         return _rejected_response(session_id, RejectionReason.NO_LIVE_FACE)
-    logger.info("[%s] Live image decoded shape=%s", session_id, live_img.shape)
+    extra_frames = []
+    for b64 in (extra_frames_b64 or [])[:8]:
+        try:
+            extra_frames.append(base64_to_numpy(b64))
+        except Exception:
+            continue   # an undecodable extra frame only reduces the temporal evidence
 
-    # ── Server-side liveness ──────────────────────────────────────────────────
-    server_live, liveness_score = check_liveness(live_img)
-    liveness_ok = liveness_from_frontend or server_live
-    logger.info(
-        "[%s] Liveness frontend=%s server=%s score=%.4f final=%s",
-        session_id,
-        liveness_from_frontend,
-        server_live,
-        liveness_score,
-        liveness_ok,
+    # ── Aadhaar Secure QR (optional) ──────────────────────────────────────────
+    # The photo inside the QR is only trusted when its signature verified, or
+    # when it couldn't be checked for lack of a certificate (still decoded QR data).
+    qr: dict = session.get("aadhaar_qr") or {}
+    qr_photo_path: Optional[str] = None
+    if qr.get("signature_status") in (QrSignatureStatus.VERIFIED.value, QrSignatureStatus.UNVERIFIED.value):
+        qr_photo_path = qr.get("photo_path")
+
+    # Printed photo is the primary reference; the QR photo stands in if none was found
+    reference_path = doc_face_path or qr_photo_path
+
+    # ── Face detection, alignment, embedding, comparison ──────────────────────
+    capture_issue: Optional[str] = None
+    face_status: Optional[str] = None
+    similarity = 0.0
+    live_face_path: Optional[str] = None
+    live_embedding = None
+    face_box = None
+    match_reason: Optional[RejectionReason] = None
+
+    if not reference_path:
+        logger.warning("[%s] No reference face for this session", session_id)
+        capture_issue = RejectionReason.NO_FACE_FOUND.value
+    else:
+        match = verify_faces(reference_path, live_img)
+        similarity, live_embedding, face_box = match.similarity, match.live_embedding, match.live_face_box
+        match_reason = match.rejection_reason
+        if match.live_face_crop is not None:
+            live_face_path = save_image(match.live_face_crop, "uploads/faces", prefix=f"live_{session_id}")
+        if match.aligned_pair is not None:
+            save_image(match.aligned_pair, "uploads/faces", prefix=f"pair_{session_id}")
+        if match_reason in (None, RejectionReason.FACE_MISMATCH):
+            face_status = classify_similarity(similarity)
+        else:
+            capture_issue = match_reason.value   # no/multiple faces, poor quality, processing error → retake
+        logger.info("[%s] Face status=%s similarity=%.4f", session_id, face_status, similarity)
+
+    tamper_flags: list[str] = list(qr.get("tamper_flags") or [])
+    qr_face_similarity, document_qr_face_similarity = _compare_with_qr_photo(
+        session_id, qr_photo_path, doc_face_path, live_embedding, tamper_flags
     )
-    if not liveness_ok:
-        logger.warning(
-            "[%s] Liveness not confirmed (frontend=%s server=%s); continuing face comparison",
-            session_id, liveness_from_frontend, server_live
-        )
+    # The signed QR photo disagreeing with the selfie while the printed photo agrees = inconclusive
+    if (face_status == FaceMatch.MATCH and qr_face_similarity is not None
+            and classify_similarity(qr_face_similarity) == FaceMatch.NO_MATCH):
+        face_status = FaceMatch.UNCERTAIN
 
-    # ── Detect and save live face crop ────────────────────────────────────────
-    live_face_img = extract_face_mtcnn(live_img)
-    if live_face_img is None:
-        logger.warning("[%s] No face detected in live capture", session_id)
-        await _save_rejected_record(session_id, session, 0.0, liveness_ok, RejectionReason.NO_LIVE_FACE)
-        return _rejected_response(session_id, RejectionReason.NO_LIVE_FACE, liveness=liveness_ok)
-    logger.info("[%s] Live face crop shape=%s", session_id, live_face_img.shape)
+    # ── Liveness + face-alteration (server-side; run even if the match failed, for the audit trail) ──
+    liveness = assess_liveness(live_img, face_box, extra_frames, client_challenge_passed=liveness_from_frontend)
+    deepfake = assess_face_alteration(live_img, face_box)
 
-    live_face_path = save_image(live_face_img, "uploads/faces", prefix=f"live_{session_id}")
-    logger.info("[%s] Live face saved: %s", session_id, live_face_path)
-
-    # ── Face comparison ────────────────────────────────────────────────────────
-    if not doc_face_path:
-        logger.warning("[%s] No document face path in session", session_id)
-        await _save_rejected_record(session_id, session, 0.0, liveness_ok, RejectionReason.NO_FACE_FOUND)
-        return _rejected_response(session_id, RejectionReason.NO_FACE_FOUND, liveness=liveness_ok)
-
-    face_match, similarity = verify_faces(doc_face_path, live_face_img)
-    logger.info("[%s] Similarity: %.4f", session_id, similarity)
-    logger.info("[%s] Verified: %s", session_id, face_match)
-
-    # ── Final decision ────────────────────────────────────────────────────────
-    rejection_reason: Optional[RejectionReason] = None
-    if not face_match:
-        rejection_reason = RejectionReason.FACE_MISMATCH
-    elif not liveness_ok:
-        rejection_reason = RejectionReason.LIVENESS_FAILED
-    elif REQUIRE_DOCUMENT_CONFIDENCE_FOR_APPROVAL and doc_confidence < DOCUMENT_CONFIDENCE_THRESHOLD:
-        rejection_reason = RejectionReason.LOW_DOCUMENT_CONFIDENCE
-    elif doc_confidence < DOCUMENT_CONFIDENCE_THRESHOLD:
-        logger.warning(
-            "[%s] Document confidence %.4f is below threshold %.4f, but not blocking approval",
-            session_id,
-            doc_confidence,
-            DOCUMENT_CONFIDENCE_THRESHOLD,
-        )
-
-    decision = VerificationStatus.APPROVED if rejection_reason is None else VerificationStatus.REJECTED
-    verified = decision == VerificationStatus.APPROVED
-    reason_text = rejection_reason.value if rejection_reason else None
-    status_text = "approved" if verified else "rejected"
+    # ── Final identity decision ───────────────────────────────────────────────
+    decision = decide_identity(
+        document_status=document_status,
+        document_risk=document_risk,
+        face_status=face_status,
+        capture_issue=capture_issue,
+        liveness=liveness,
+        deepfake=deepfake,
+        extra_tamper_flags=[f for f in tamper_flags if "signature is invalid" not in f],
+        similarity=similarity,
+    )
+    kyc_status = decision.status
+    legacy = decision.legacy_decision
+    verified = kyc_status == KycStatus.VERIFIED
+    reason_text = "; ".join(decision.reasons) if decision.reasons else None
+    status_text = {VerificationStatus.APPROVED: "approved", VerificationStatus.REJECTED: "rejected"}.get(legacy, "pending")
+    thresholds = {"face_match": face_match_threshold(), "face_no_match": face_no_match_threshold()}
     logger.info(
-        "[%s] Final decision=%s verified=%s reason=%s similarity=%.4f liveness=%s",
-        session_id,
-        decision.value,
-        verified,
-        reason_text,
-        similarity,
-        liveness_ok,
+        "[%s] Final decision=%s doc=%s face=%s liveness=%s deepfake=%s risk=%.3f ms=%d",
+        session_id, kyc_status.value, document_status, face_status, liveness.status.value,
+        deepfake.level, decision.risk_score, int((time.perf_counter() - started) * 1000),
     )
 
-    # ── Persist ───────────────────────────────────────────────────────────────
     await _upsert_verification(session_id, session, {
-        "verified":         verified,
-        "face_match":       face_match,
-        "similarity_score": round(similarity, 4),
-        "liveness_verified": liveness_ok,
-        "final_decision":   decision,
-        "status":           status_text,
-        "rejection_reason": reason_text,
-        "reason":           reason_text,
-        "live_face_path":   live_face_path,
-        "updated_at":       datetime.now(timezone.utc),
+        "verified":          verified,
+        "face_match":        face_status == FaceMatch.MATCH,
+        "face_match_status": face_status,
+        "similarity_score":  round(similarity, 4),
+        "liveness_verified": liveness.status == LivenessStatus.PASS,
+        "liveness":          liveness.to_dict(),
+        "deepfake":          deepfake.to_dict(),
+        "kyc_status":        kyc_status.value,
+        "risk_score":        decision.risk_score,
+        "reasons":           decision.reasons,
+        "final_decision":    legacy,
+        "status":            status_text,
+        "rejection_reason":  reason_text,
+        "reason":            reason_text,
+        "live_face_path":    live_face_path,
+        "qr_face_similarity":          qr_face_similarity,
+        "document_qr_face_similarity": document_qr_face_similarity,
+        "tamper_flags":      tamper_flags,
+        "face_thresholds":   thresholds,
+        "verified_at":       datetime.now(timezone.utc),
+        "updated_at":        datetime.now(timezone.utc),
     })
 
-    response = FaceVerifyResponse(
+    return FaceVerifyResponse(
         session_id=session_id,
         verified=verified,
-        face_match=face_match,
-        similarity_score=round(similarity, 4),
-        liveness_verified=liveness_ok,
-        final_decision=decision,
+        face_match=face_status == FaceMatch.MATCH,
+        similarity_score=round(max(0.0, min(1.0, similarity)), 4),
+        liveness_verified=liveness.status == LivenessStatus.PASS,
+        final_decision=legacy,
         status=status_text,
         rejection_reason=reason_text,
         reason=reason_text,
-        message=f"Verification {decision.value}" + (f" — {reason_text}" if reason_text else ""),
+        message=f"Verification {kyc_status.value}" + (f" — {reason_text}" if reason_text else ""),
+        qr_face_similarity=qr_face_similarity,
+        document_qr_face_similarity=document_qr_face_similarity,
+        tamper_flags=tamper_flags,
+        kyc_status=kyc_status,
+        face_match_status=face_status,
+        liveness=liveness.to_dict(),
+        deepfake=deepfake.to_dict(),
+        risk_score=decision.risk_score,
+        reasons=decision.reasons,
+        face_thresholds=thresholds,
     )
-    logger.info("[%s] Face verify API response=%s", session_id, response.model_dump())
-    return response
+
+
+def _compare_with_qr_photo(
+    session_id: str,
+    qr_photo_path: Optional[str],
+    doc_face_path: Optional[str],
+    live_embedding,
+    tamper_flags: list[str],
+) -> tuple[Optional[float], Optional[float]]:
+    """
+    Compare the selfie and the printed photo against the photo inside the Aadhaar QR.
+    Both photos come from the same enrolment, so a printed photo that doesn't match
+    the QR photo means it was substituted. Appends to tamper_flags in that case.
+    Returns (selfie↔QR, printed↔QR) similarities.
+    """
+    if not qr_photo_path:
+        return None, None
+    try:
+        qr_embedding = reference_embedding(qr_photo_path)
+        if qr_embedding is None:
+            logger.warning("[%s] No face detected in Aadhaar QR photo %s", session_id, qr_photo_path)
+            return None, None
+
+        selfie_qr = None
+        if live_embedding is not None:
+            selfie_qr = round(max(0.0, cosine_similarity(live_embedding, qr_embedding)), 4)
+
+        printed_qr = None
+        doc_embedding = reference_embedding(doc_face_path) if doc_face_path else None
+        if doc_embedding is not None:
+            printed_qr = round(max(0.0, cosine_similarity(doc_embedding, qr_embedding)), 4)
+            if printed_qr < SIMILARITY_THRESHOLD:
+                tamper_flags.append("Photo printed on the card does not match the photo in the Aadhaar QR code")
+
+        logger.info("[%s] QR photo similarity selfie=%s printed=%s", session_id, selfie_qr, printed_qr)
+        return selfie_qr, printed_qr
+    except Exception:
+        logger.exception("[%s] Aadhaar QR photo comparison failed", session_id)
+        return None, None
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────

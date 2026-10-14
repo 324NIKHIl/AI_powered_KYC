@@ -110,6 +110,102 @@ def deskew(img: np.ndarray) -> np.ndarray:
     return cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
 
 
+# ── Face detection & alignment ────────────────────────────────────────────────
+
+# Canonical landmark positions of a 112×112 ArcFace input (InsightFace template):
+# left eye, right eye, nose tip, left mouth corner, right mouth corner.
+# Recognition models are trained on faces warped onto exactly these points, so
+# embeddings of unaligned / loosely cropped faces are unreliable.
+ARCFACE_LANDMARKS = np.array(
+    [
+        [38.2946, 51.6963],
+        [73.5318, 51.5014],
+        [56.0252, 71.7366],
+        [41.5493, 92.3655],
+        [70.7299, 92.2041],
+    ],
+    dtype=np.float32,
+)
+_LANDMARK_KEYS = ("left_eye", "right_eye", "nose", "mouth_left", "mouth_right")
+
+MIN_FACE_CONFIDENCE = 0.90
+
+_mtcnn_detector = None
+
+
+def _get_mtcnn():
+    """MTCNN builds several TF graphs on construction — create it once."""
+    global _mtcnn_detector
+    if _mtcnn_detector is None:
+        from mtcnn import MTCNN
+        _mtcnn_detector = MTCNN()
+    return _mtcnn_detector
+
+
+def _scale_detection(det: dict, factor: float) -> dict:
+    x, y, w, h = det["box"]
+    return {
+        **det,
+        "box": [int(x * factor), int(y * factor), int(w * factor), int(h * factor)],
+        "keypoints": {k: (p[0] * factor, p[1] * factor) for k, p in det["keypoints"].items()},
+    }
+
+
+def detect_faces(img: np.ndarray, min_confidence: float = MIN_FACE_CONFIDENCE) -> list[dict]:
+    """
+    Run MTCNN and return confident detections, largest face first.
+    Each detection has "box" (x, y, w, h), "confidence" and "keypoints".
+    Small images (e.g. a low-res scan where the ID photo is tiny) are retried
+    at 2× since MTCNN misses faces below ~20 px.
+    """
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    detector = _get_mtcnn()
+    faces = [d for d in detector.detect_faces(rgb) if d["confidence"] >= min_confidence]
+
+    if not faces and max(img.shape[:2]) < 1000:
+        big = cv2.resize(rgb, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+        faces = [
+            _scale_detection(d, 0.5)
+            for d in detector.detect_faces(big)
+            if d["confidence"] >= min_confidence
+        ]
+
+    return sorted(faces, key=lambda d: d["box"][2] * d["box"][3], reverse=True)
+
+
+def _similarity_transform(src: np.ndarray, dst: np.ndarray) -> np.ndarray:
+    """Least-squares similarity transform (Umeyama) mapping src points onto dst, as a 2×3 matrix."""
+    src_mean, dst_mean = src.mean(axis=0), dst.mean(axis=0)
+    src_c, dst_c = src - src_mean, dst - dst_mean
+    u, s, vt = np.linalg.svd(dst_c.T @ src_c / len(src))
+    d = np.ones(2)
+    if np.linalg.det(u) * np.linalg.det(vt) < 0:
+        d[-1] = -1
+    rotation = u @ np.diag(d) @ vt
+    scale = (s * d).sum() / src_c.var(axis=0).sum()
+    translation = dst_mean - scale * rotation @ src_mean
+    return np.hstack([scale * rotation, translation[:, None]])
+
+
+def align_face(img: np.ndarray, keypoints: dict, size: int = 112) -> np.ndarray:
+    """Warp a face onto the ArcFace landmark template, returning a size×size BGR crop."""
+    src = np.array([keypoints[k] for k in _LANDMARK_KEYS], dtype=np.float64)
+    dst = ARCFACE_LANDMARKS.astype(np.float64) * (size / 112.0)
+    matrix = _similarity_transform(src, dst)
+    return cv2.warpAffine(img, matrix, (size, size), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+
+
+def crop_face(img: np.ndarray, box, pad_ratio: float = 0.45) -> np.ndarray:
+    """Padded crop around a detection box — for display / audit, not for embeddings."""
+    x, y, w, h = box
+    pad = int(max(w, h) * pad_ratio)
+    x1 = max(0, x - pad)
+    y1 = max(0, y - pad)
+    x2 = min(img.shape[1], x + w + pad)
+    y2 = min(img.shape[0], y + h + pad)
+    return _ensure_min_face_size(img[y1:y2, x1:x2])
+
+
 # ── Face extraction from document ─────────────────────────────────────────────
 
 def extract_face_opencv(img: np.ndarray) -> np.ndarray | None:
@@ -123,38 +219,21 @@ def extract_face_opencv(img: np.ndarray) -> np.ndarray | None:
     faces = detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
     if len(faces) == 0:
         return None
-    x, y, w, h = max(faces, key=lambda r: r[2] * r[3])
-    pad = int(max(w, h) * 0.35)
-    x1 = max(0, x - pad)
-    y1 = max(0, y - pad)
-    x2 = min(img.shape[1], x + w + pad)
-    y2 = min(img.shape[0], y + h + pad)
-    return _ensure_min_face_size(img[y1:y2, x1:x2])
+    box = max(faces, key=lambda r: r[2] * r[3])
+    return crop_face(img, box, pad_ratio=0.35)
 
 
 def extract_face_mtcnn(img: np.ndarray) -> np.ndarray | None:
     """
     MTCNN-based face detection — more accurate than Haar cascades.
-    Falls back to opencv on failure.
+    Returns a padded crop of the largest confident face (the main ID photo,
+    not a ghost image / emblem). Falls back to opencv on failure.
     """
     try:
-        from mtcnn import MTCNN
-        detector = MTCNN()
-        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        results = detector.detect_faces(rgb)
-        if not results:
+        faces = detect_faces(img)
+        if not faces:
             return extract_face_opencv(img)
-        # Pick highest-confidence detection
-        best = max(results, key=lambda r: r["confidence"])
-        if best["confidence"] < 0.75:
-            return extract_face_opencv(img)
-        x, y, w, h = best["box"]
-        pad = int(max(w, h) * 0.45)
-        x1 = max(0, x - pad)
-        y1 = max(0, y - pad)
-        x2 = min(img.shape[1], x + w + pad)
-        y2 = min(img.shape[0], y + h + pad)
-        return _ensure_min_face_size(img[y1:y2, x1:x2])
+        return crop_face(img, faces[0]["box"])
     except Exception as exc:
         logger.warning("MTCNN failed (%s), falling back to OpenCV", exc)
         return extract_face_opencv(img)
