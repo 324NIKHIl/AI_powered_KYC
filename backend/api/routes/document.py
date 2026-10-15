@@ -14,6 +14,7 @@ from services.document_service import process_aadhaar_qr_upload, process_documen
 from services.kyc import engine as kyc_engine
 from services.kyc.documents import aadhaar as aadhaar_verifier
 from services.kyc.result import DocumentVerification, mask_identifier
+from services.kyc.user_details import SELECTABLE_DOCUMENT_TYPES, compare_declared_details, parse_declared_type
 from utils.uploads import validate_upload
 from services.verification_service import (
     create_session,
@@ -44,6 +45,10 @@ def _mask_fields(fields: dict) -> dict:
 async def upload_document(
     file: UploadFile = File(..., description="JPG / PNG / PDF of identity document"),
     session_id: str  = Form(default=""),
+    document_type: str = Form(default="", description="Document type the user selected (required)"),
+    full_name: str   = Form(default=""),
+    dob:       str   = Form(default=""),
+    phone:     str   = Form(default=""),
 ):
     logger.info(
         "Document upload request filename=%s content_type=%s supplied_session=%s",
@@ -55,6 +60,14 @@ async def upload_document(
     data = await file.read()
     upload = validate_upload(data, file.content_type)
     logger.info("Document upload bytes=%d kind=%s", len(data), upload.extension)
+
+    # ── The user must have chosen a document type (the UI enforces this too) ─────────────────
+    declared_type = parse_declared_type(document_type)
+    if declared_type is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Please select a document type: " + ", ".join(t.value for t in SELECTABLE_DOCUMENT_TYPES) + ".",
+        )
 
     # ── Session ───────────────────────────────────────────────────────────────
     sid = session_id.strip() or generate_session_id()
@@ -70,6 +83,19 @@ async def upload_document(
             detail="Document processing failed. Please try again with a clearer image.",
         ) from exc
 
+    # ── Typed-in name / DOB / document type vs what OCR read (booleans only; nothing is echoed back) ──
+    result.declared_document_type = declared_type.value
+    result.details_check = compare_declared_details(
+        declared_type=declared_type, detected_type=result.document_type,
+        full_name=full_name, dob=dob, extracted=result.extracted_fields,
+    )
+    declared_details = {
+        "document_type": declared_type.value,
+        "full_name":     full_name.strip(),
+        "dob":           dob.strip(),
+        "phone":         phone.strip(),
+    }
+
     # ── Persist session + verification record ─────────────────────────────────
     aadhaar_qr = result.aadhaar_qr.model_dump(mode="json") if result.aadhaar_qr else None
     session_data = {
@@ -79,6 +105,7 @@ async def upload_document(
         "aadhaar_qr":                aadhaar_qr,
         "document_status":           verification.status.value,
         "document_risk":             verification.risk_score,
+        "declared_details":          declared_details,
     }
     await create_session(sid, session_data)
     await upsert_document_record(sid, {
@@ -89,6 +116,8 @@ async def upload_document(
         "document_face_extracted":   result.document_face_extracted,
         "document_face_path":        result.document_face_path,
         "aadhaar_qr":                aadhaar_qr,
+        "declared_details":          declared_details,
+        "details_check":             result.details_check,
         # Unified evidence-based result (identifiers masked) + server-side audit fields
         "document_verification":     verification.model_dump(mode="json"),
         "document_status":           verification.status.value,

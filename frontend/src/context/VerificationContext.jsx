@@ -3,7 +3,9 @@ import { createContext, useContext, useReducer } from 'react'
 /* ── State shape ─────────────────────────────────────────────────────────── */
 const INITIAL = {
   sessionId:        null,
-  step:             1,   // 1=upload, 2=ocr-preview, 3=webcam, 4=processing, 5=done
+  step:             1,   // 1=your details, 2=document type + upload, 3=ocr-preview, 4=webcam, 5=processing, 6=done
+  userDetails:      null, // { fullName, dobIso, dob, phone } typed by the user on step 1
+  documentType:     '',   // aadhaar | passport | citizenship | pan | driving_licence — mandatory on step 2
   documentResult:   null,
   faceResult:       null,
   error:            null,
@@ -18,6 +20,8 @@ function reducer(state, action) {
     case 'SET_ERROR':         return { ...state, error: action.payload, loading: false }
     case 'CLEAR_ERROR':       return { ...state, error: null }
     case 'SET_STEP':          return { ...state, step: action.payload }
+    case 'DETAILS_SAVED':     return { ...state, userDetails: action.payload, error: null, step: 2 }
+    case 'SET_DOCUMENT_TYPE': return { ...state, documentType: action.payload, error: null }
     case 'DOCUMENT_SUCCESS':
       return {
         ...state,
@@ -25,7 +29,7 @@ function reducer(state, action) {
         error:          null,
         sessionId:      action.payload.session_id,
         documentResult: action.payload,
-        step:           2,
+        step:           3,
       }
     case 'QR_SUCCESS': {
       const { verification, ...qr } = action.payload || {}
@@ -45,7 +49,7 @@ function reducer(state, action) {
         loading:    false,
         error:      null,
         faceResult: action.payload,
-        step:       5,
+        step:       6,
       }
     case 'RESET':
       return INITIAL
