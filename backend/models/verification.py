@@ -112,6 +112,8 @@ class DocumentUploadResponse(BaseModel):
     document_face_extracted:  bool
     document_face_path:       Optional[str] = None
     aadhaar_qr:               Optional[AadhaarQrResult] = None
+    declared_document_type:   Optional[str] = None                    # what the user selected on step 2
+    details_check:            Optional[dict[str, Any]] = None         # typed details vs OCR (booleans only)
     # Unified, evidence-based verification result (see services/kyc/result.py)
     verification:             Optional[dict[str, Any]] = None
     message:                  str

@@ -6,9 +6,20 @@ import { uploadAadhaarQr, uploadDocument, verifyFace } from '../services/api'
 import AadhaarQrPanel from '../components/AadhaarQrPanel'
 import ProgressSteps from '../components/ProgressSteps'
 import DocumentUpload from '../components/DocumentUpload'
+import UserDetailsForm from '../components/UserDetailsForm'
 import WebcamCapture from '../components/WebcamCapture'
 import ConfidenceMeter from '../components/ConfidenceMeter'
 import VerificationBreakdown from '../components/VerificationBreakdown'
+
+// Document types offered on step 2 — choosing one is mandatory
+const DOCUMENT_TYPES = [
+  { value: 'aadhaar',         label: 'Aadhaar Card' },
+  { value: 'passport',        label: 'Passport' },
+  { value: 'citizenship',     label: 'Citizenship Certificate' },
+  { value: 'pan',             label: 'PAN Card' },
+  { value: 'driving_licence', label: 'Driving Licence' },
+]
+const MISMATCH_LABELS = { document_type: 'document type', name: 'name', dob: 'date of birth' }
 
 export default function VerificationPage() {
   const { state, dispatch } = useVerification()
@@ -18,6 +29,7 @@ export default function VerificationPage() {
   const [uploading,      setUploading]      = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [processingFace, setProcessingFace] = useState(false)
+  const [typeTouched,    setTypeTouched]    = useState(false)
 
   const currentStep = state.step
   const documentType = state.documentResult?.document_type
@@ -26,11 +38,17 @@ export default function VerificationPage() {
 
   // ── Step 1 → 2: Upload document ─────────────────────────────────────────
   async function handleDocumentSubmit() {
+    if (!state.documentType) { setTypeTouched(true); return }   // document type is mandatory
     if (!selectedFile) return
     setUploading(true)
     dispatch({ type: 'SET_LOADING', payload: true })
     try {
-      const result = await uploadDocument(selectedFile, '', (pct) => setUploadProgress(pct))
+      const result = await uploadDocument(selectedFile, '', (pct) => setUploadProgress(pct), {
+        documentType: state.documentType,
+        fullName:     state.userDetails?.fullName,
+        dob:          state.userDetails?.dob,
+        phone:        state.userDetails?.phone,
+      })
       dispatch({ type: 'DOCUMENT_SUCCESS', payload: result })
     } catch (err) {
       dispatch({ type: 'SET_ERROR', payload: err.message })
@@ -47,7 +65,7 @@ export default function VerificationPage() {
 
   // ── Step 3 → 5: Face verify ─────────────────────────────────────────────
   async function handleFaceCapture({ base64, livenessVerified, extraFrames = [] }) {
-    dispatch({ type: 'SET_STEP', payload: 4 })
+    dispatch({ type: 'SET_STEP', payload: 5 })
     setProcessingFace(true)
     try {
       const result = await verifyFace(state.sessionId, base64, livenessVerified, extraFrames)
@@ -55,7 +73,7 @@ export default function VerificationPage() {
       navigate(`/result/${state.sessionId}`)
     } catch (err) {
       dispatch({ type: 'SET_ERROR', payload: err.message })
-      dispatch({ type: 'SET_STEP', payload: 3 })
+      dispatch({ type: 'SET_STEP', payload: 4 })
     } finally {
       setProcessingFace(false)
     }
@@ -92,13 +110,55 @@ export default function VerificationPage() {
           )}
         </AnimatePresence>
 
-        {/* ── STEP 1: Upload ─────────────────────────────────────────────── */}
+        {/* ── STEP 1: Your details ───────────────────────────────────────── */}
         {currentStep === 1 && (
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-8 space-y-6">
             <div>
-              <h2 className="text-xl font-bold mb-1">Step 1 — Upload Document</h2>
-              <p className="text-white/40 text-sm">Upload a clear photo or scan of your identity document</p>
+              <h2 className="text-xl font-bold mb-1">Step 1 — Your Details</h2>
+              <p className="text-white/40 text-sm">
+                Enter your name and date of birth exactly as they appear on your document — we compare them with what is read from it — and a phone number to reach you.
+              </p>
             </div>
+            <UserDetailsForm
+              initial={state.userDetails}
+              onSubmit={(details) => dispatch({ type: 'DETAILS_SAVED', payload: details })}
+            />
+          </motion.div>
+        )}
+
+        {/* ── STEP 2: Document type + upload ─────────────────────────────── */}
+        {currentStep === 2 && (
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-8 space-y-6">
+            <div>
+              <h2 className="text-xl font-bold mb-1">Step 2 — Upload Document</h2>
+              <p className="text-white/40 text-sm">Choose the type of document, then upload a clear photo or scan of it</p>
+            </div>
+
+            <div className="space-y-1.5">
+              <label htmlFor="documentType" className="text-sm text-white/60">
+                Document type <span className="text-danger">*</span>
+              </label>
+              <select
+                id="documentType"
+                value={state.documentType}
+                onChange={(e) => { dispatch({ type: 'SET_DOCUMENT_TYPE', payload: e.target.value }); setTypeTouched(true) }}
+                aria-invalid={typeTouched && !state.documentType}
+                className={`w-full rounded-xl bg-surface-700/60 border px-4 py-3 text-sm text-white focus:outline-none focus:border-primary ${
+                  typeTouched && !state.documentType ? 'border-danger/60' : 'border-white/10'
+                }`}
+              >
+                <option value="">Select a document type…</option>
+                {DOCUMENT_TYPES.map((t) => (
+                  <option key={t.value} value={t.value}>{t.label}</option>
+                ))}
+              </select>
+              {!state.documentType && (
+                <p className={`text-xs ${typeTouched ? 'text-danger' : 'text-white/30'}`}>
+                  {typeTouched ? 'Cannot proceed — select a document type first.' : 'Required — you must select a document type to continue.'}
+                </p>
+              )}
+            </div>
+
             <DocumentUpload
               onFileSelected={setSelectedFile}
               uploading={uploading}
@@ -106,23 +166,30 @@ export default function VerificationPage() {
             />
             <button
               onClick={handleDocumentSubmit}
-              disabled={!selectedFile || uploading}
+              disabled={!state.documentType || !selectedFile || uploading}
               className="btn-primary w-full"
             >
               {uploading ? (
                 <><span className="w-4 h-4 border-2 border-surface-900/50 border-t-surface-900 rounded-full animate-spin" /> Processing OCR…</>
               ) : 'Next: Extract Fields →'}
             </button>
+            <button
+              onClick={() => dispatch({ type: 'SET_STEP', payload: 1 })}
+              disabled={uploading}
+              className="text-white/40 text-sm hover:text-white/70 transition-colors mx-auto block"
+            >
+              ← Back to your details
+            </button>
           </motion.div>
         )}
 
         {/* ── STEP 2: OCR Results ────────────────────────────────────────── */}
-        {currentStep === 2 && state.documentResult && (
+        {currentStep === 3 && state.documentResult && (
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
             <div className="glass-card p-8 space-y-6">
               <div className="flex items-start justify-between">
                 <div>
-                  <h2 className="text-xl font-bold mb-1">Step 2 — OCR Results</h2>
+                  <h2 className="text-xl font-bold mb-1">Step 3 — OCR Results</h2>
                   <p className="text-white/40 text-sm">Review extracted information</p>
                 </div>
                 <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-surface-700 text-xs font-mono uppercase">
@@ -130,6 +197,24 @@ export default function VerificationPage() {
                   {state.documentResult.document_type}
                 </div>
               </div>
+
+              {/* Typed-in details vs what OCR read */}
+              {state.documentResult.details_check && (
+                state.documentResult.details_check.mismatches?.length > 0 ? (
+                  <div className="flex items-start gap-3 p-3 rounded-xl bg-warning/10 border border-warning/20">
+                    <span>⚠️</span>
+                    <p className="text-sm">
+                      What you entered doesn't match the document: {state.documentResult.details_check.mismatches
+                        .map((k) => MISMATCH_LABELS[k] || k).join(', ')}. Check the values below, or go back and upload a clearer image.
+                    </p>
+                  </div>
+                ) : state.documentResult.details_check.all_match ? (
+                  <div className="flex items-center gap-3 p-3 rounded-xl bg-success/10 border border-success/20">
+                    <span>✅</span>
+                    <span className="text-sm">The details you entered match the document</span>
+                  </div>
+                ) : null
+              )}
 
               {/* Confidence meter + fields */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
@@ -172,7 +257,7 @@ export default function VerificationPage() {
             )}
 
             <button
-              onClick={() => dispatch({ type: 'SET_STEP', payload: 3 })}
+              onClick={() => dispatch({ type: 'SET_STEP', payload: 4 })}
               className={qrPending ? 'btn-secondary w-full' : 'btn-primary w-full'}
             >
               {qrPending ? 'Skip QR check — continue to Live Face Capture →' : 'Next: Live Face Capture →'}
@@ -181,10 +266,10 @@ export default function VerificationPage() {
         )}
 
         {/* ── STEP 3: Webcam capture ─────────────────────────────────────── */}
-        {currentStep === 3 && (
+        {currentStep === 4 && (
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-8 space-y-6">
             <div>
-              <h2 className="text-xl font-bold mb-1">Step 3 — Live Face Capture</h2>
+              <h2 className="text-xl font-bold mb-1">Step 4 — Live Face Capture</h2>
               <p className="text-white/40 text-sm">
                 Follow the on-screen liveness challenges, then capture your face
               </p>
@@ -194,7 +279,7 @@ export default function VerificationPage() {
         )}
 
         {/* ── STEP 4: Processing spinner ────────────────────────────────── */}
-        {currentStep === 4 && (
+        {currentStep === 5 && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -229,7 +314,7 @@ export default function VerificationPage() {
         )}
 
         {/* Reset */}
-        {currentStep < 4 && (
+        {currentStep < 5 && (
           <button
             onClick={() => dispatch({ type: 'RESET' })}
             className="text-white/20 text-sm hover:text-white/40 transition-colors mx-auto block"

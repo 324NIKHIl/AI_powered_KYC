@@ -36,11 +36,17 @@ api.interceptors.response.use(
  * @param {File} file
  * @param {string} [sessionId]
  * @param {Function} [onProgress] - (percent: number) => void
+ * @param {{documentType: string, fullName?: string, dob?: string, phone?: string}} [details]
+ *        documentType is mandatory (the backend rejects the upload without it)
  */
-export async function uploadDocument(file, sessionId = '', onProgress) {
+export async function uploadDocument(file, sessionId = '', onProgress, details = {}) {
   const form = new FormData()
   form.append('file', file)
   if (sessionId) form.append('session_id', sessionId)
+  form.append('document_type', details.documentType || '')
+  if (details.fullName) form.append('full_name', details.fullName)
+  if (details.dob)      form.append('dob', details.dob)
+  if (details.phone)    form.append('phone', details.phone)
 
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 300_000) // 5 minute timeout
