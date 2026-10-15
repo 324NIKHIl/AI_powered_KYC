@@ -32,10 +32,10 @@ def validate_name(name: Optional[str]) -> bool:
 # ── Date of Birth ─────────────────────────────────────────────────────────────
 
 def validate_dob(dob: Optional[str]) -> bool:
-    """Accept common formats: DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD."""
+    """Accept common formats: DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD (or the year alone, as on some Aadhaar cards)."""
     if not dob:
         return False
-    formats = ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d %b %Y", "%d %B %Y"]
+    formats = ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d %b %Y", "%d %B %Y", "%Y"]   # "%Y": Aadhaar may print only the birth year
     for fmt in formats:
         try:
             parsed = datetime.strptime(dob.strip(), fmt)

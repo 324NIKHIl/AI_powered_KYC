@@ -11,6 +11,7 @@ import logging
 from difflib import SequenceMatcher
 from typing import Optional
 
+import cv2
 import numpy as np
 
 from models.verification import DocumentType, ExtractedFields
@@ -74,6 +75,53 @@ def extract_text(img: np.ndarray) -> list[str]:
     return lines
 
 
+def _read_tiles(reader, img: np.ndarray, scale: float = 1.5, overlap: float = 0.25) -> list[tuple[str, float]]:
+    """
+    Second pass: read the image as 4 overlapping, zoomed-in tiles.
+
+    Scanning a whole phone photo in one go misses small print (names, DOB lines) and merges
+    neighbouring boxes; zooming into each quarter reads them far more reliably. Box positions are
+    mapped back to the full image so the results sort in natural reading order.
+    """
+    h, w = img.shape[:2]
+    if min(h, w) < 300:
+        return []
+    th, tw = min(h, int(h / 2 * (1 + overlap))), min(w, int(w / 2 * (1 + overlap)))
+    results = []
+    for y0 in (0, h - th):
+        for x0 in (0, w - tw):
+            tile = cv2.resize(img[y0:y0 + th, x0:x0 + tw], None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+            for box, text, conf in reader.readtext(
+                tile, detail=1, paragraph=False, width_ths=0.7,
+                text_threshold=0.4, low_text=0.25, link_threshold=0.4,
+            ):
+                results.append(([[x0 + p[0] / scale, y0 + p[1] / scale] for p in box], text, conf))
+    return _sort_ocr_results(results)
+
+
+def extract_text_tiles(img: np.ndarray) -> list[str]:
+    """Zoomed-in tile pass (see _read_tiles) — slower, so callers run it only when the quick pass came up short."""
+    return [text for text, _ in _read_tiles(_get_reader(), img)]
+
+
+def merge_lines(lines: list[str], extra: list[str]) -> tuple[list[str], str]:
+    """Append lines from an extra pass that are not near-duplicates of what is already there."""
+    merged = list(lines)
+    keys = [_normalise_for_dedupe(l) for l in merged]
+    for text in extra:
+        key = _normalise_for_dedupe(text)
+        if len(key) < 2 or any(_looks_like_duplicate(key, k) for k in keys):
+            continue
+        merged.append(text)
+        keys.append(key)
+    return merged, " ".join(merged)
+
+
+def needs_tile_pass(fields: ExtractedFields) -> bool:
+    """True when the quick pass did not find a plausible name (2+ words), a DOB and an ID number."""
+    return not (fields.name and len(fields.name.split()) >= 2 and fields.dob and fields.id_number)
+
+
 def extract_text_full(img: np.ndarray) -> tuple[list[str], str]:
     """
     Return both list and concatenated string.
@@ -89,9 +137,8 @@ def extract_text_full(img: np.ndarray) -> tuple[list[str], str]:
         preprocess_for_ocr(deskew(enhance_contrast(img))),
     ]
 
-    selected: list[tuple[str, float]] = []
-    for variant in variants:
-        results = reader.readtext(
+    def read_variant(variant: np.ndarray) -> list[tuple[str, float]]:
+        return _sort_ocr_results(reader.readtext(
             variant,
             detail=1,
             paragraph=False,
@@ -99,8 +146,11 @@ def extract_text_full(img: np.ndarray) -> tuple[list[str], str]:
             text_threshold=0.4,
             low_text=0.25,
             link_threshold=0.4,
-        )
-        for text, confidence in _sort_ocr_results(results):
+        ))
+
+    selected: list[tuple[str, float]] = []
+    for pass_results in (read_variant(v) for v in variants):
+        for text, confidence in pass_results:
             key = _normalise_for_dedupe(text)
             if len(key) < 2:
                 continue
@@ -138,6 +188,10 @@ def _parse_name(lines: list[str], doc_type: DocumentType) -> Optional[str]:
         ]
         if any(word in upper for word in blocked):
             return False
+        # OCR garbles the big header word ("Govemmenioklnd") — reject near-misspellings of it too
+        for token in re.findall(r"[A-Z]+", upper):
+            if token.startswith("GOV") and len(token) >= 8 and SequenceMatcher(None, token[:10], "GOVERNMENT").ratio() >= 0.68:
+                return False
         if re.search(r"\d", value):
             return False
         return bool(re.match(r"^[A-Za-z][A-Za-z\s\.\-']{2,59}$", value.strip()))
@@ -197,16 +251,57 @@ def _parse_name(lines: list[str], doc_type: DocumentType) -> Optional[str]:
                 if len(parts) > 1 and re.match(r"^[A-Za-z\s]{3,50}$", parts[1]):
                     return parts[1].strip().title()
 
-    # Generic: find longest all-alpha title-case string
-    candidates = [l for l in lines if is_name_candidate(l) and re.match(r"^[A-Z][a-z]+(\s+[A-Z][a-z]+){0,4}$", l)]
+    # Generic: find the longest all-alpha title-case string. OCR often splits "First Last" into two
+    # boxes, so neighbouring single words are also tried as a pair; multi-word names win over one word.
+    title = re.compile(r"^[A-Z][a-z]+(\s+[A-Z][a-z]+){0,4}$")
+    candidates = [l.strip() for l in lines if is_name_candidate(l) and title.match(l.strip())]
+    for a, b in zip(lines, lines[1:]):
+        pair = f"{a.strip()} {b.strip()}"
+        if is_name_candidate(a) and is_name_candidate(b) and title.match(a.strip()) and title.match(b.strip()) \
+                and " " not in a.strip() and " " not in b.strip():
+            candidates.append(pair)
     if candidates:
-        return max(candidates, key=len)
+        multi = [c for c in candidates if len(c.split()) >= 2]
+        return max(multi or candidates, key=len)
 
     return None
 
 
+_DOB_LABEL = re.compile(r"D\s*[O0o]\s*[B8]\b|DATE\s+OF\s+BIRTH|YEAR\s+OF\s+BIRTH|\bBIRTH\b", re.IGNORECASE)
+_NOT_A_DOB = re.compile(r"ISSUE|DOWNLOAD|GENERAT|PRINT|VALID|EXPIR|UPDATE", re.IGNORECASE)
+_DATE_RES = [
+    r"\b(\d{2}/\d{2}/\d{4})\b",
+    r"\b(\d{2}-\d{2}-\d{4})\b",
+    r"\b(\d{4}-\d{2}-\d{2})\b",
+    r"\b(\d{2}\s+[A-Za-z]{3,9}\s+\d{4})\b",
+]
+
+
 def _parse_dob(lines: list[str]) -> Optional[str]:
-    """Find any date pattern in the text lines."""
+    """
+    Date of birth. Prefers the value that follows a DOB / "Date of Birth" label, and accepts a
+    year alone ("DOB: 2005" — Aadhaar allows that). Dates near "issued", "downloaded", etc. are
+    never taken as the DOB. Without any label, falls back to the first remaining date.
+    """
+    full_text = " ".join(lines)
+
+    for label in _DOB_LABEL.finditer(full_text):
+        window = full_text[label.end(): label.end() + 28]
+        # the value closest after the label wins (a full date, or a bare year like "DOB: 2005")
+        found = [m for p in _DATE_RES + [r"\b((?:19|20)\d{2})\b"] if (m := re.search(p, window))]
+        if found:
+            return min(found, key=lambda m: m.start()).group(1)
+
+    for line in lines:
+        for pattern in _DATE_RES:
+            for match in re.finditer(pattern, line):
+                if not _NOT_A_DOB.search(line[max(0, match.start() - 30): match.start()]):
+                    return match.group(1)
+    return None
+
+
+def _parse_dob_legacy(lines: list[str]) -> Optional[str]:
+    """Previous behaviour: any date pattern in the text (kept for reference/tests)."""
     date_patterns = [
         r"\b(\d{2}/\d{2}/\d{4})\b",
         r"\b(\d{2}-\d{2}-\d{4})\b",
@@ -255,13 +350,28 @@ def _parse_id_number(lines: list[str], doc_type: DocumentType) -> Optional[str]:
             if match:
                 return "".join(match.groups())
 
+        from services.kyc.documents.aadhaar import verhoeff_valid
+
         candidates = []
         for match in re.finditer(r"\b([2-9]\d{3})[\s\.,-]+(\d{4})[\s\.,-]+(\d{4})\b", full_text):
             context = full_text[max(0, match.start() - 25):match.start()].upper()
             if "VID" in context:
                 continue
             candidates.append("".join(match.groups()))
-        return candidates[-1] if candidates else None
+        valid = [c for c in candidates if verhoeff_valid(c)]
+        if valid or candidates:
+            return (valid or candidates)[-1]
+
+        # Fallback for noisy reads: three consecutive 4-character groups where look-alike letters
+        # (O→0, I/l→1, S→5, B→8, Z→2) are repaired. Accepted only if the Aadhaar checksum passes.
+        repair = str.maketrans("OoIl|SBZ", "00111582")
+        groups = [re.sub(r"[^0-9OoIl|SBZ]", "", w).translate(repair) for w in re.split(r"[\s\.,\-]+", full_text)]
+        groups = [g for g in groups if len(g) == 4 and g.isdigit()]
+        for i in range(len(groups) - 2):
+            number = "".join(groups[i:i + 3])
+            if number[0] in "23456789" and verhoeff_valid(number):
+                return number
+        return None
 
     if doc_type == DocumentType.PAN:
         clean = re.sub(r"[^A-Z0-9]", "", full_text.upper())

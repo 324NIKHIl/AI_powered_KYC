@@ -87,7 +87,7 @@ async def upload_document(
     result.declared_document_type = declared_type.value
     result.details_check = compare_declared_details(
         declared_type=declared_type, detected_type=result.document_type,
-        full_name=full_name, dob=dob, extracted=result.extracted_fields,
+        full_name=full_name, dob=dob, extracted=result.extracted_fields, ocr_text=result.ocr_text or "",
     )
     declared_details = {
         "document_type": declared_type.value,

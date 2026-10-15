@@ -63,3 +63,24 @@ def test_upload_route_requires_document_type():
         assert "select a document type" in r.json()["detail"].lower()
     # missing the field entirely
     assert client.post("/api/upload-document", files=files).status_code == 422
+
+
+# ── Name found in the raw OCR text / year-only DOB ───────────────────────────
+
+def test_name_found_in_raw_ocr_text_when_parsed_name_is_garbage():
+    r = _compare(full_name="Kirtan Shrestha", dob="01/01/2005",
+                 extracted=ExtractedFields(name="Govemmenioklnd", dob="2005"),
+                 ocr_text="Government of India Kirtan Shresiha DOB: 2005 MALE")
+    assert r["name"] is True and r["dob"] is True
+
+
+def test_name_not_in_text_is_a_mismatch_only_if_something_was_parsed():
+    assert _compare(full_name="Kirtan Shrestha", extracted=ExtractedFields(name="Rohan Das"),
+                    ocr_text="Rohan Das")["name"] is False
+    assert _compare(full_name="Kirtan Shrestha", extracted=ExtractedFields(name=None),
+                    ocr_text="nothing readable")["name"] is None
+
+
+def test_year_only_dob():
+    assert _compare(dob="19/11/2005", extracted=ExtractedFields(name="RAHUL SHARMA", dob="2005"))["dob"] is True
+    assert _compare(dob="19/11/2004", extracted=ExtractedFields(name="RAHUL SHARMA", dob="2005"))["dob"] is False
