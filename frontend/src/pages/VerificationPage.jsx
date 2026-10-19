@@ -163,6 +163,8 @@ export default function VerificationPage() {
               onFileSelected={setSelectedFile}
               uploading={uploading}
               uploadProgress={uploadProgress}
+              locked={!state.documentType}
+              onLockedClick={() => setTypeTouched(true)}
             />
             <button
               onClick={handleDocumentSubmit}

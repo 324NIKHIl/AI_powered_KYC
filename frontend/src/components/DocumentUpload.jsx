@@ -14,6 +14,8 @@ export default function DocumentUpload({
   onFileSelected,
   uploading,
   uploadProgress,
+  locked = false,        // true until a document type has been chosen: nothing can be dropped or browsed
+  onLockedClick,         // called when the user tries to use the locked box (so the page can explain why)
 }) {
   const [preview, setPreview] = useState(null)
   const [fileInfo, setFileInfo] = useState(null)
@@ -91,7 +93,7 @@ export default function DocumentUpload({
     accept: ALLOWED,
     maxFiles: 1,
     maxSize: MAX_SIZE,
-    disabled: uploading,
+    disabled: uploading || locked,
     noClick: true,
     noKeyboard: true,
   })
@@ -105,14 +107,20 @@ export default function DocumentUpload({
           relative border-2 border-dashed rounded-2xl p-8 text-center
           transition-all duration-300 cursor-pointer overflow-hidden
           ${
-            isDragActive
-              ? 'border-primary bg-primary/5'
-              : 'border-white/20 hover:border-primary/50 hover:bg-primary/5'
+            locked
+              ? 'border-white/10 bg-surface-700/30'
+              : isDragActive
+                ? 'border-primary bg-primary/5'
+                : 'border-white/20 hover:border-primary/50 hover:bg-primary/5'
           }
           ${uploading ? 'opacity-60 cursor-not-allowed' : ''}
+          ${locked ? 'opacity-50 cursor-not-allowed' : ''}
         `}
+        aria-disabled={locked || uploading}
         onClick={() => {
-          if (!uploading) {
+          if (locked) {
+            onLockedClick?.()
+          } else if (!uploading) {
             open()
           }
         }}
@@ -186,19 +194,17 @@ export default function DocumentUpload({
               className="pointer-events-none"
             >
               <div className="text-5xl mb-4 opacity-60">
-                🪪
+                {locked ? '🔒' : '🪪'}
               </div>
 
               <p className="text-white font-semibold mb-1">
-                Upload Identity Document
+                {locked ? 'Select a document type first' : 'Upload Identity Document'}
               </p>
 
               <p className="text-white/40 text-sm">
-                Drag & drop or click to browse
-              </p>
-
-              <p className="text-white/30 text-xs mt-3">
-                Aadhaar • PAN • Passport • College ID
+                {locked
+                  ? 'Upload unlocks once you choose a document type above'
+                  : 'Drag & drop or click to browse'}
               </p>
 
               <p className="text-white/20 text-xs mt-1">
