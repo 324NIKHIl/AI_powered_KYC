@@ -13,7 +13,7 @@ import logging
 
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
 logger = logging.getLogger(__name__)
 
@@ -276,7 +276,9 @@ async def save_upload_bytes(data: bytes, directory: str, original_filename: str)
         save_path = os.path.join(directory, f"doc_{file_id}{ext}")
         with open(save_path, "wb") as f:
             f.write(data)
-        pil = Image.open(io.BytesIO(data)).convert("RGB")
+        # Phone photos are often stored sideways with an EXIF "rotate" tag; apply it, otherwise the OCR
+        # and face detector see the document turned 90° and read nothing.
+        pil = ImageOps.exif_transpose(Image.open(io.BytesIO(data))).convert("RGB")
         img = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
 
     return save_path, img

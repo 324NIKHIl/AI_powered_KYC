@@ -84,3 +84,12 @@ def test_name_not_in_text_is_a_mismatch_only_if_something_was_parsed():
 def test_year_only_dob():
     assert _compare(dob="19/11/2005", extracted=ExtractedFields(name="RAHUL SHARMA", dob="2005"))["dob"] is True
     assert _compare(dob="19/11/2004", extracted=ExtractedFields(name="RAHUL SHARMA", dob="2005"))["dob"] is False
+
+
+def test_document_type_alone_is_not_a_match():
+    """Nothing readable from the document → must not claim 'details match' just because the type agrees."""
+    r = _compare(extracted=ExtractedFields(name=None, dob=None))
+    assert r["document_type"] is True and r["name"] is None and r["dob"] is None
+    assert r["all_match"] is False and r["unreadable"] is True
+    r = _compare()
+    assert r["all_match"] is True and r["unreadable"] is False

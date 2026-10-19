@@ -213,6 +213,14 @@ export default function VerificationPage() {
                     <span>✅</span>
                     <span className="text-sm">The details you entered match the document</span>
                   </div>
+                ) : state.documentResult.details_check.unreadable ? (
+                  <div className="flex items-start gap-3 p-3 rounded-xl bg-warning/10 border border-warning/20">
+                    <span>⚠️</span>
+                    <p className="text-sm">
+                      We couldn't read your name or date of birth from the document, so we couldn't compare them with
+                      what you entered. Go back and upload a flat, well-lit photo with no glare.
+                    </p>
+                  </div>
                 ) : null
               )}
 

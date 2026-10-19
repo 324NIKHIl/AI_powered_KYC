@@ -96,6 +96,9 @@ def compare_declared_details(
     return {
         **checks,
         "mismatches": [k for k, v in checks.items() if v is False],
-        # True only when something was compared and nothing disagreed
-        "all_match": bool(compared) and all(compared),
+        # True only when the name and/or date of birth were actually compared and nothing disagreed
+        # (agreeing on the document type alone says nothing about the person's details)
+        "all_match": (checks["name"] is not None or checks["dob"] is not None) and all(compared),
+        # True when neither the name nor the DOB could be read from the document
+        "unreadable": checks["name"] is None and checks["dob"] is None,
     }
