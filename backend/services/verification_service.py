@@ -175,6 +175,7 @@ async def run_face_verification(
     decision = decide_identity(
         document_status=document_status,
         document_risk=document_risk,
+        document_confidence_score=float(session.get("document_confidence_score", 0.0) or 0.0),
         face_status=face_status,
         capture_issue=capture_issue,
         liveness=liveness,

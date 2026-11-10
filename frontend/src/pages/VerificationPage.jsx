@@ -10,6 +10,7 @@ import UserDetailsForm from '../components/UserDetailsForm'
 import WebcamCapture from '../components/WebcamCapture'
 import ConfidenceMeter from '../components/ConfidenceMeter'
 import VerificationBreakdown from '../components/VerificationBreakdown'
+import PassportDetailsPanel from '../components/PassportDetailsPanel'
 
 // Document types offered on step 2 — choosing one is mandatory
 const DOCUMENT_TYPES = [
@@ -33,6 +34,7 @@ export default function VerificationPage() {
 
   const currentStep = state.step
   const documentType = state.documentResult?.document_type
+  const passportSelected = state.documentType === 'passport' || documentType === 'passport'
   const showQrPanel = ['aadhaar', 'unknown'].includes(documentType) || Boolean(state.documentResult?.aadhaar_qr)
   const qrPending = showQrPanel && !state.documentResult?.aadhaar_qr?.found
 
@@ -70,7 +72,7 @@ export default function VerificationPage() {
     try {
       const result = await verifyFace(state.sessionId, base64, livenessVerified, extraFrames, challenge)
       dispatch({ type: 'FACE_SUCCESS', payload: result })
-      navigate(`/result/${state.sessionId}`)
+      navigate('/complete', { replace: true })
     } catch (err) {
       dispatch({ type: 'SET_ERROR', payload: err.message })
       dispatch({ type: 'SET_STEP', payload: 4 })
@@ -227,25 +229,34 @@ export default function VerificationPage() {
               )}
 
               {/* Confidence meter + fields */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
-                <ConfidenceMeter score={state.documentResult.document_confidence_score} label="OCR read confidence" />
-
-                <div className="md:col-span-2 space-y-3">
-                  {[
-                    { label: 'Name',      value: state.documentResult.extracted_fields?.name,      valid: state.documentResult.field_validation?.name      },
-                    { label: 'DOB',       value: state.documentResult.extracted_fields?.dob,       valid: state.documentResult.field_validation?.dob        },
-                    { label: 'Gender',    value: state.documentResult.extracted_fields?.gender,    valid: true                                               },
-                    { label: 'ID Number', value: state.documentResult.extracted_fields?.id_number, valid: state.documentResult.field_validation?.id_number  },
-                  ].map(({ label, value, valid }) => (
-                    <div key={label} className="flex items-center gap-3 bg-surface-700/50 rounded-xl px-4 py-3">
-                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${valid ? 'bg-success' : 'bg-danger'}`} />
-                      <span className="text-white/40 text-sm w-24 flex-shrink-0">{label}</span>
-                      <span className="font-mono text-sm text-white truncate">{value || '—'}</span>
-                      <span className="ml-auto text-xs">{valid ? '✓' : '✗'}</span>
-                    </div>
-                  ))}
+              {passportSelected ? (
+                <div className="space-y-5">
+                  <ConfidenceMeter score={state.documentResult.document_confidence_score} label="OCR read confidence" />
+                  <PassportDetailsPanel
+                    fields={state.documentResult.extracted_fields}
+                    verification={state.documentResult.verification?.extracted}
+                  />
                 </div>
-              </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
+                  <ConfidenceMeter score={state.documentResult.document_confidence_score} label="OCR read confidence" />
+                  <div className="md:col-span-2 space-y-3">
+                    {[
+                      { label: 'Name',      value: state.documentResult.extracted_fields?.name,      valid: state.documentResult.field_validation?.name      },
+                      { label: 'DOB',       value: state.documentResult.extracted_fields?.dob,       valid: state.documentResult.field_validation?.dob        },
+                      { label: 'Gender',    value: state.documentResult.extracted_fields?.gender,    valid: true                                               },
+                      { label: 'ID Number', value: state.documentResult.extracted_fields?.id_number, valid: state.documentResult.field_validation?.id_number  },
+                    ].map(({ label, value, valid }) => (
+                      <div key={label} className="flex items-center gap-3 bg-surface-700/50 rounded-xl px-4 py-3">
+                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${valid ? 'bg-success' : 'bg-danger'}`} />
+                        <span className="text-white/40 text-sm w-24 flex-shrink-0">{label}</span>
+                        <span className="font-mono text-sm text-white truncate">{value || '—'}</span>
+                        <span className="ml-auto text-xs">{valid ? '✓' : '✗'}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Face extraction status */}
               <div className={`flex items-center gap-3 p-3 rounded-xl ${state.documentResult.document_face_extracted ? 'bg-success/10 border border-success/20' : 'bg-warning/10 border border-warning/20'}`}>

@@ -5,6 +5,12 @@ const api = axios.create({
   timeout: 300_000,  // 5 minutes for heavy processing (OCR, face extraction, etc.)
 })
 
+api.interceptors.request.use((config) => {
+  const token = sessionStorage.getItem('adminToken')
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
+
 // ── Interceptors ─────────────────────────────────────────────────────────────
 api.interceptors.response.use(
   (res) => {
@@ -12,6 +18,11 @@ api.interceptors.response.use(
     return res
   },
   (err) => {
+    if (err.response?.status === 401 && !err.config?.url?.includes('/admin/login')) {
+      sessionStorage.removeItem('adminToken')
+      sessionStorage.removeItem('adminUsername')
+      if (window.location.pathname.startsWith('/admin')) window.location.assign('/admin/login')
+    }
     let message =
       err.response?.data?.detail ||
       err.response?.data?.message ||
@@ -143,8 +154,38 @@ export async function getVerificationDetail(sessionId) {
   return data
 }
 
+export async function getVerificationFaceImage(sessionId, imageType) {
+  const { data } = await api.get(`/admin/verification/${sessionId}/face-image/${imageType}`, { responseType: 'blob' })
+  if (!data.type?.startsWith('image/')) {
+    throw new Error('The backend face-image route is unavailable. Restart the backend and refresh this page.')
+  }
+  return data
+}
+
 export async function deleteVerification(sessionId) {
   await api.delete(`/verification/${sessionId}`)
+}
+
+export async function loginAdmin(username, password) {
+  const { data } = await api.post('/admin/login', { username, password })
+  sessionStorage.setItem('adminToken', data.access_token)
+  sessionStorage.setItem('adminUsername', data.username)
+  return data
+}
+
+export function logoutAdmin() {
+  sessionStorage.removeItem('adminToken')
+  sessionStorage.removeItem('adminUsername')
+}
+
+export async function updateVerificationDetails(sessionId, extracted_fields, reason) {
+  const { data } = await api.put(`/admin/verification/${sessionId}/details`, { extracted_fields, reason })
+  return data
+}
+
+export async function recordManualDecision(sessionId, decision, reason) {
+  const { data } = await api.put(`/admin/verification/${sessionId}/decision`, { decision, reason })
+  return data
 }
 
 export default api

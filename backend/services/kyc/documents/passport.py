@@ -94,12 +94,16 @@ def verify_sync(ctx: DocContext) -> tuple[DocumentVerification, MrzResult]:
     v.add("mrz_structure", "MRZ structure valid (ICAO 9303 TD3)", CheckOutcome.PASS)
 
     v.format_valid = mrz.checksums_ok and mrz.dob is not None and mrz.expiry is not None
-    if mrz.checksums_ok and not any("date" in p or "sex" in p for p in mrz.problems):
+    if mrz.checksums_ok and mrz.dob is not None and mrz.expiry is not None:
         v.add("mrz_checksums", "MRZ check digits valid", CheckOutcome.PASS,
               ("Corrected OCR letter/digit confusions in numeric fields. " if mrz.ocr_corrected else "")
               + "Check digits are public arithmetic — they do not prove the passport was issued")
     else:
         v.add("mrz_checksums", "MRZ check digits", CheckOutcome.FAIL, "; ".join(mrz.problems).capitalize())
+
+    if mrz.sex not in ("M", "F", ""):
+        v.add("mrz_sex", "MRZ sex marker readable", CheckOutcome.WARN,
+              "The sex marker could not be read as M, F or blank; review the MRZ manually")
 
     if mrz.nationality in ICAO_CODES and (not mrz.issuing_country or mrz.issuing_country in ICAO_CODES):
         v.add("mrz_country", "Issuing state and nationality codes valid", CheckOutcome.PASS)

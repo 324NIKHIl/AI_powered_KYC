@@ -5,6 +5,12 @@ import LandingPage from './pages/LandingPage'
 import VerificationPage from './pages/VerificationPage'
 import ResultPage from './pages/ResultPage'
 import AdminDashboard from './pages/AdminDashboard'
+import AdminLogin from './pages/AdminLogin'
+import CompletionPage from './pages/CompletionPage'
+
+function AdminOnly({ children }) {
+  return sessionStorage.getItem('adminToken') ? children : <Navigate to="/admin/login" replace />
+}
 
 export default function App() {
   return (
@@ -19,8 +25,10 @@ export default function App() {
           <Routes>
             <Route path="/"          element={<LandingPage />} />
             <Route path="/verify"    element={<VerificationPage />} />
-            <Route path="/result/:sessionId" element={<ResultPage />} />
-            <Route path="/admin"     element={<AdminDashboard />} />
+            <Route path="/complete" element={<CompletionPage />} />
+            <Route path="/admin/login" element={<AdminLogin />} />
+            <Route path="/admin" element={<AdminOnly><AdminDashboard /></AdminOnly>} />
+            <Route path="/result/:sessionId" element={<AdminOnly><ResultPage /></AdminOnly>} />
             <Route path="*"          element={<Navigate to="/" replace />} />
           </Routes>
         </main>

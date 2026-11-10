@@ -34,8 +34,8 @@ def test_challenge_is_random_single_use_and_expires():
 
 
 def test_real_head_turns_pass():
-    assert run(["center", "left", "right"], [0, -18, 18]).passed
-    assert run(["center", "right", "left"], [2, 20, -16]).passed
+    assert run(["center", "left", "right"], [0, 18, -18]).passed
+    assert run(["center", "right", "left"], [2, -20, 16]).passed
 
 
 def test_static_photo_fails():
@@ -44,11 +44,11 @@ def test_static_photo_fails():
 
 
 def test_wrong_direction_fails():
-    assert run(["center", "left", "right"], [0, 18, -18]).status == "FAIL"
+    assert run(["center", "left", "right"], [0, -18, 18]).status == "FAIL"
 
 
 def test_identical_frames_fail():
-    assert run(["center", "left", "right"], [0, -18, 18], raw=["a", "a", "a"]).status == "FAIL"
+    assert run(["center", "left", "right"], [0, 18, -18], raw=["a", "a", "a"]).status == "FAIL"
 
 
 def test_missing_face_or_bad_start_is_uncertain_not_fail():

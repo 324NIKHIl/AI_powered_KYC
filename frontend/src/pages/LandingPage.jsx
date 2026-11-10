@@ -71,9 +71,6 @@ export default function LandingPage() {
             <Link to="/verify" className="btn-primary text-lg px-8 py-4">
               🚀 Start Verification
             </Link>
-            <Link to="/admin" className="btn-secondary text-lg px-8 py-4">
-              📊 View Dashboard
-            </Link>
           </motion.div>
 
           {/* Stats row */}

@@ -116,8 +116,9 @@ def evaluate(steps: Sequence[str], yaws: Sequence[Optional[float]], frames_disti
     reasons: list[str] = []
     for step, y in zip(steps[1:], yaws[1:]):
         delta = y - base
-        # "left" = the nose moves towards the left of the (mirrored, selfie-style) image
-        ok = delta <= -need if step == "left" else delta >= need
+        # The submitted webcam frames produce a positive yaw delta for the prompted
+        # left turn and a negative delta for the prompted right turn.
+        ok = delta >= need if step == "left" else delta <= -need
         if not ok:
             reasons.append(f"head did not turn {step} as asked (change {delta:+.2f}, needed {need:.2f})")
     if reasons:

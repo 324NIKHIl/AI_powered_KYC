@@ -379,8 +379,15 @@ def _parse_id_number(lines: list[str], doc_type: DocumentType) -> Optional[str]:
         return match.group(1) if match else None
 
     if doc_type == DocumentType.PASSPORT:
-        match = re.search(r"\b([A-Z][0-9]{7})\b", full_text.upper())
-        return match.group(1) if match else None
+        # Prefer the ICAO MRZ, which also supports passports with a two-letter
+        # Nepal prefix (for example PA1234567). Aadhaar parsing remains separate.
+        from services.kyc.documents.mrz import parse_mrz_from_ocr
+
+        mrz = parse_mrz_from_ocr(lines)
+        if mrz.structure_ok and mrz.passport_number and mrz.check_digits.get("passport_number"):
+            return mrz.passport_number
+        match = re.search(r"\b([A-Z]{1,2}\s?[0-9]{7,8})\b", full_text.upper())
+        return re.sub(r"\s+", "", match.group(1)) if match else None
 
     # College ID — look for numeric roll numbers
     match = re.search(r"\b([A-Z0-9]{4,12})\b", full_text.upper())
@@ -409,4 +416,18 @@ def parse_extracted_fields(lines: list[str], full_text: str) -> tuple[DocumentTy
         id_number=_parse_id_number(lines, doc_type),
         address=_parse_address(lines),
     )
+
+    # Passport MRZ fields are a stronger source for passport OCR than the
+    # generic Aadhaar-style label parser. Keep this override passport-only.
+    if doc_type == DocumentType.PASSPORT:
+        from services.kyc.documents.mrz import parse_mrz_from_ocr
+
+        mrz = parse_mrz_from_ocr(lines)
+        if mrz.structure_ok:
+            if mrz.given_names and mrz.surname:
+                fields.name = f"{mrz.given_names} {mrz.surname}".title()
+            if mrz.dob and mrz.check_digits.get("date_of_birth"):
+                fields.dob = mrz.dob.strftime("%d/%m/%Y")
+            if mrz.passport_number and mrz.check_digits.get("passport_number"):
+                fields.id_number = mrz.passport_number
     return doc_type, fields
