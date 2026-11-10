@@ -94,13 +94,24 @@ export async function uploadAadhaarQr(sessionId, file) {
  * @param {string} liveFrameBase64 - base64 JPEG captured from webcam
  * @param {boolean} livenessVerified - whether frontend liveness challenge passed
  */
-export async function verifyFace(sessionId, liveFrameBase64, livenessVerified = false, extraFrames = []) {
+export async function verifyFace(sessionId, liveFrameBase64, livenessVerified = false, extraFrames = [], challenge = null) {
   const { data } = await api.post('/face-verify', {
+    challenge_id:            challenge?.challengeId ?? null,
+    challenge_frames_base64: challenge?.frames ?? [],
     session_id:        sessionId,
     live_face_base64:  liveFrameBase64,
     liveness_verified: livenessVerified,
     extra_frames_base64: extraFrames,
   })
+  return data
+}
+
+/**
+ * Ask the server for a random, single-use head-turn challenge.
+ * Resolves to { challenge_id, steps: [{ id: 'center'|'left'|'right', prompt }], expires_in }.
+ */
+export async function getLivenessChallenge(sessionId) {
+  const { data } = await api.post('/liveness-challenge', { session_id: sessionId })
   return data
 }
 

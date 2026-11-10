@@ -64,11 +64,11 @@ export default function VerificationPage() {
   }
 
   // ── Step 3 → 5: Face verify ─────────────────────────────────────────────
-  async function handleFaceCapture({ base64, livenessVerified, extraFrames = [] }) {
+  async function handleFaceCapture({ base64, livenessVerified, extraFrames = [], challenge = null }) {
     dispatch({ type: 'SET_STEP', payload: 5 })
     setProcessingFace(true)
     try {
-      const result = await verifyFace(state.sessionId, base64, livenessVerified, extraFrames)
+      const result = await verifyFace(state.sessionId, base64, livenessVerified, extraFrames, challenge)
       dispatch({ type: 'FACE_SUCCESS', payload: result })
       navigate(`/result/${state.sessionId}`)
     } catch (err) {

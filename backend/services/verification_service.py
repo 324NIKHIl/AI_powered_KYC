@@ -25,6 +25,7 @@ from services.face_service import (
     verify_faces,
 )
 from services.kyc.config import face_match_threshold, face_no_match_threshold
+from services.kyc.challenge import ChallengeResult, check_challenge_usable, new_challenge, public_view, verify_challenge
 from services.kyc.deepfake import assess_face_alteration
 from services.kyc.identity import FaceMatch, classify_similarity, decide_identity
 from services.kyc.liveness import LivenessStatus, assess_liveness
@@ -80,6 +81,8 @@ async def run_face_verification(
     live_face_b64: str,
     liveness_from_frontend: bool,
     extra_frames_b64: Optional[list[str]] = None,
+    challenge_id: Optional[str] = None,
+    challenge_frames_b64: Optional[list[str]] = None,
 ) -> FaceVerifyResponse:
     """
     Document verification (already done at upload) → live capture → liveness → face detection
@@ -114,6 +117,8 @@ async def run_face_verification(
             extra_frames.append(base64_to_numpy(b64))
         except Exception:
             continue   # an undecodable extra frame only reduces the temporal evidence
+
+    challenge_result = await _verify_head_turn(session_id, session, challenge_id, challenge_frames_b64)
 
     # ── Aadhaar Secure QR (optional) ──────────────────────────────────────────
     # The photo inside the QR is only trusted when its signature verified, or
@@ -162,7 +167,8 @@ async def run_face_verification(
         face_status = FaceMatch.UNCERTAIN
 
     # ── Liveness + face-alteration (server-side; run even if the match failed, for the audit trail) ──
-    liveness = assess_liveness(live_img, face_box, extra_frames, client_challenge_passed=liveness_from_frontend)
+    liveness = assess_liveness(live_img, face_box, extra_frames, client_challenge_passed=liveness_from_frontend,
+                               challenge=challenge_result)
     deepfake = assess_face_alteration(live_img, face_box)
 
     # ── Final identity decision ───────────────────────────────────────────────
@@ -234,6 +240,36 @@ async def run_face_verification(
         reasons=decision.reasons,
         face_thresholds=thresholds,
     )
+
+
+async def issue_liveness_challenge(session_id: str) -> Optional[dict]:
+    """Create (and store) a fresh random head-turn challenge for the session; None if no such session."""
+    if not await get_session(session_id):
+        return None
+    ch = new_challenge()
+    await update_session(session_id, {"liveness_challenge": ch})
+    return public_view(ch)
+
+
+async def _verify_head_turn(session_id, session, challenge_id, frames_b64) -> Optional[ChallengeResult]:
+    """Check the submitted head-turn frames against the stored challenge. None = no usable challenge."""
+    ch = session.get("liveness_challenge")
+    problem = check_challenge_usable(ch, challenge_id)
+    if problem:
+        logger.info("[%s] head-turn challenge not usable: %s", session_id, problem)
+        return None
+    await update_session(session_id, {"liveness_challenge.used": True})   # single use, pass or fail
+    try:
+        frames = [base64_to_numpy(b) for b in (frames_b64 or [])]
+    except Exception:
+        return ChallengeResult("FAIL", ["the head-turn frames could not be decoded"])
+    if len(frames) != len(ch["steps"]):
+        return ChallengeResult("FAIL", ["the head-turn frames do not match the challenge"])
+    try:
+        return verify_challenge(ch["steps"], frames, raw_frames=list(frames_b64))
+    except Exception:
+        logger.exception("[%s] head-turn verification crashed", session_id)
+        return ChallengeResult("UNCERTAIN", ["head-turn check could not be completed — retry"])
 
 
 def _compare_with_qr_photo(

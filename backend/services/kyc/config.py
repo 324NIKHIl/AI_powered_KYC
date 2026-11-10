@@ -135,3 +135,17 @@ def max_upload_bytes() -> int:
 
 def aadhaar_certificate_path() -> str:
     return os.getenv("AADHAAR_CERTIFICATE_PATH", "").strip()
+
+
+def liveness_require_challenge() -> bool:
+    """When true (default) a PASS needs a server-verified random head-turn challenge."""
+    return os.getenv("LIVENESS_REQUIRE_CHALLENGE", "true").lower() != "false"
+
+
+def liveness_min_turn_ratio() -> float:
+    """Minimum change in the nose-offset/eye-distance ratio (vs. the straight-ahead frame) for a head turn."""
+    return _float("LIVENESS_MIN_TURN_RATIO", 0.12)
+
+
+def liveness_challenge_ttl_s() -> int:
+    return int(_float("LIVENESS_CHALLENGE_TTL_S", 180))
