@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useLocation } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { useVerification } from '../context/VerificationContext'
-import { getVerificationDetail } from '../services/api'
+import { getVerificationDetail, getVerificationFaceImage } from '../services/api'
 import AadhaarQrPanel from '../components/AadhaarQrPanel'
 import ConfidenceMeter from '../components/ConfidenceMeter'
 import StatusBadge from '../components/StatusBadge'
 import VerificationBreakdown from '../components/VerificationBreakdown'
+import PassportDetailsPanel from '../components/PassportDetailsPanel'
 
 const LEGACY = { APPROVED: 'VERIFIED', REJECTED: 'REJECTED', PENDING: 'MANUAL_REVIEW_REQUIRED' }
 const TITLES = {
@@ -26,10 +27,13 @@ const ICON = { VERIFIED: '✅', REJECTED: '❌', SUSPICIOUS: '🚩', VERIFICATIO
 
 export default function ResultPage() {
   const { sessionId }        = useParams()
+  const location = useLocation()
+  const returnTo = location.state?.returnTo || '/admin'
   const { state, dispatch }  = useVerification()
   const [record, setRecord]  = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError]    = useState(null)
+  const [faceImages, setFaceImages] = useState({})
 
   // Prefer in-memory state; fall back to API fetch (e.g. direct link)
   useEffect(() => {
@@ -46,6 +50,41 @@ export default function ResultPage() {
     }
     load()
   }, [sessionId])
+
+  useEffect(() => {
+    let active = true
+    const objectUrls = []
+    const images = [
+      ['document', record?.document_face_path],
+      ['live', record?.live_face_path],
+    ].filter(([, path]) => Boolean(path))
+
+    if (!images.length) {
+      setFaceImages({})
+      return undefined
+    }
+
+    Promise.all(images.map(async ([type]) => {
+      try {
+        const blob = await getVerificationFaceImage(sessionId, type)
+        const url = URL.createObjectURL(blob)
+        objectUrls.push(url)
+        return [type, url]
+      } catch {
+        return [type, null]
+      }
+    })).then((entries) => {
+      if (active) setFaceImages(Object.fromEntries(entries))
+      else objectUrls.forEach(URL.revokeObjectURL)
+    }).catch(() => {
+      if (active) setFaceImages({})
+    })
+
+    return () => {
+      active = false
+      objectUrls.forEach(URL.revokeObjectURL)
+    }
+  }, [sessionId, record?.document_face_path, record?.live_face_path])
 
   if (loading) {
     return (
@@ -84,6 +123,10 @@ export default function ResultPage() {
     <div className="min-h-screen py-12 px-4">
       <div className="max-w-4xl mx-auto space-y-8">
 
+        <Link to={returnTo} className="inline-flex items-center text-sm text-primary hover:underline">
+          ← Back to verification history
+        </Link>
+
         {/* ── Result hero ─────────────────────────────────────────────────── */}
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
@@ -120,6 +163,26 @@ export default function ResultPage() {
           <TriCard label="Face Match" value={faceStatus} />
           <TriCard label="Liveness" value={liveness?.status ?? (record.liveness_verified ? 'PASS' : null)} />
         </div>
+
+        {String(record.document_type).toLowerCase() === 'passport' && (
+          <PassportDetailsPanel
+            fields={record.extracted_fields}
+            verification={record.document_verification?.extracted}
+          />
+        )}
+
+        {(record.document_face_path || record.live_face_path) && (
+          <section className="glass-card p-6 space-y-4">
+            <div>
+              <h2 className="font-bold text-lg">Face Capture Review</h2>
+              <p className="text-xs text-white/40 mt-1">Compare the face extracted from the document with the live liveness capture.</p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+              <FaceImageCard label="Document face" image={faceImages.document} loading={Boolean(record.document_face_path) && !Object.hasOwn(faceImages, 'document')} available={Boolean(record.document_face_path)} />
+              <FaceImageCard label="Live liveness capture" image={faceImages.live} loading={Boolean(record.live_face_path) && !Object.hasOwn(faceImages, 'live')} available={Boolean(record.live_face_path)} />
+            </div>
+          </section>
+        )}
 
         {/* ── Detailed breakdown ──────────────────────────────────────────── */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -207,8 +270,8 @@ export default function ResultPage() {
           <button onClick={() => { dispatch({ type: 'RESET' }); window.location.href = '/verify' }} className="btn-primary">
             🔄 New Verification
           </button>
-          <Link to="/admin" className="btn-secondary">
-            📊 View Dashboard
+          <Link to={returnTo} className="btn-secondary">
+            ← Back to verification history
           </Link>
         </div>
       </div>
@@ -251,6 +314,21 @@ function CheckRow({ label, value, detail }) {
         <p className="text-white/80">{label}</p>
         {detail && <p className="text-xs text-white/40 break-words">{detail}</p>}
       </div>
+    </div>
+  )
+}
+
+function FaceImageCard({ label, image, loading, available }) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-surface-700/30 p-4 space-y-3">
+      <h3 className="text-sm font-semibold text-white/70">{label}</h3>
+      {image ? (
+        <img src={image} alt={label} className="w-full h-64 rounded-lg bg-black/30 object-contain" />
+      ) : (
+        <div className="w-full h-64 rounded-lg bg-black/20 flex items-center justify-center text-sm text-white/35">
+          {loading ? 'Loading face image…' : available ? 'Image unavailable. Restart the backend, then refresh this page.' : 'Face image not available'}
+        </div>
+      )}
     </div>
   )
 }

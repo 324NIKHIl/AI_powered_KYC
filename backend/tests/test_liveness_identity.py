@@ -32,7 +32,7 @@ def moire(img):
 
 def test_natural_frames_pass():
     frames = [skin_frame(seed=i) for i in range(4)]
-    r = assess_liveness(frames[0], BOX, frames[1:])
+    r = assess_liveness(frames[0], BOX, frames[1:], require_challenge=False)
     assert r.status == LivenessStatus.PASS and r.attack_score < 0.4
 
 
@@ -137,3 +137,10 @@ def test_document_unavailable_is_never_approved():
 def test_suspicious_outranks_face_mismatch_and_reasons_listed():
     d = decide(face_status=FaceMatch.NO_MATCH, liveness=LivenessResult(LivenessStatus.FAIL, 0.9, reasons=["screen"]))
     assert d.status == KycStatus.SUSPICIOUS and len(d.reasons) >= 2
+
+
+def test_natural_frames_without_head_turn_cannot_pass():
+    frames = [skin_frame(i) for i in range(1, 5)]
+    r = assess_liveness(frames[0], BOX, frames[1:])          # challenge required by default
+    assert r.status == LivenessStatus.UNCERTAIN
+    assert any("head-turn" in x for x in r.reasons)

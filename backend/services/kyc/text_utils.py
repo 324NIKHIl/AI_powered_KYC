@@ -8,7 +8,11 @@ from difflib import SequenceMatcher
 from typing import Optional
 
 _DATE_FORMATS = (
-    "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d", "%Y/%m/%d", "%d/%m/%y", "%d-%m-%y",
+    "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y",
+    # Explicit US month/day forms are unambiguous when the month/day position
+    # cannot be interpreted as day/month (for example 09/15/2005).
+    "%m/%d/%Y", "%m-%d-%Y", "%m.%d.%Y",
+    "%Y-%m-%d", "%Y/%m/%d", "%d/%m/%y", "%d-%m-%y", "%m/%d/%y", "%m-%d-%y",
     "%d %b %Y", "%d %B %Y", "%d%b%Y", "%d-%b-%Y", "%d %b %y", "%b %d %Y", "%B %d, %Y",
 )
 

@@ -16,7 +16,7 @@ from models.verification import DocumentType
 _AADHAAR_RE  = re.compile(r"\b[2-9]\d{3}\s?\d{4}\s?\d{4}\b")
 _AADHAAR_GROUPED_RE = re.compile(r"\b[2-9]\d{3}[\s\.,-]*\d{4}[\s\.,-]*\d{4}\b")
 _PAN_RE      = re.compile(r"\b[A-Z]{5}[0-9]{4}[A-Z]{1}\b")
-_PASSPORT_RE = re.compile(r"\b[A-Z]{1}[0-9]{7}\b")
+_PASSPORT_RE = re.compile(r"\b[A-Z]{1,2}[0-9]{7,8}\b")
 _MRZ_LINE_RE = re.compile(r"P[<A-Z][A-Z<]{3}[A-Z<]{20,}")
 _DL_RE = re.compile(r"\b[A-Z]{2}[\s\-]?\d{2}[\s\-]?(?:19|20)\d{2}[\s\-]?\d{7}\b")
 

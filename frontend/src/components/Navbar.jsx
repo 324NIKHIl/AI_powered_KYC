@@ -4,7 +4,7 @@ import { motion } from 'framer-motion'
 const links = [
   { to: '/',       label: 'Home'      },
   { to: '/verify', label: 'Verify'    },
-  { to: '/admin',  label: 'Dashboard' },
+  { to: '/admin/login', label: 'Admin' },
 ]
 
 export default function Navbar() {
@@ -31,7 +31,7 @@ export default function Navbar() {
         {/* Nav links */}
         <div className="flex items-center gap-1">
           {links.map(({ to, label }) => {
-            const active = pathname === to
+            const active = to === '/admin/login' ? pathname.startsWith('/admin') : pathname === to
             return (
               <Link key={to} to={to} className="relative px-4 py-2 rounded-lg text-sm font-medium transition-colors hover:text-primary">
                 <span className={active ? 'text-primary' : 'text-white/60'}>{label}</span>

@@ -1,6 +1,7 @@
-import { useRef, useState, useCallback, useEffect } from 'react'
+import { useRef, useState, useCallback } from 'react'
 import Webcam from 'react-webcam'
 import { motion, AnimatePresence } from 'framer-motion'
+import { getLivenessChallenge } from '../services/api'
 
 const VIDEO_CONSTRAINTS = {
   width:       640,
@@ -8,98 +9,100 @@ const VIDEO_CONSTRAINTS = {
   facingMode: 'user',
 }
 
-/**
- * Liveness challenge steps shown sequentially to the user.
- * After all steps are acknowledged, liveness is marked complete.
- */
-const CHALLENGES = [
-  { id: 1, text: 'Look straight at the camera', icon: '👁️'  },
-  { id: 2, text: 'Blink your eyes slowly',       icon: '😑' },
-  { id: 3, text: 'Slightly turn your head left', icon: '↩️' },
-  { id: 4, text: 'Return to center — hold still',icon: '✅' },
-]
+const ICONS = { center: '👁️', left: '⬅️', right: '➡️' }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const b64 = (dataUrl) => dataUrl.split(',')[1]
 
+/**
+ * Active liveness: the SERVER picks a random sequence of head turns (e.g. straight → left → right).
+ * We show each prompt, count down so the user can get into position, and grab one frame per step.
+ * The server measures the head angle in every frame itself — nothing here proves liveness, so a
+ * photo or a phone screen held up to the camera cannot pass by "completing" the steps.
+ */
 export default function WebcamCapture({ onCapture, sessionId }) {
   const webcamRef = useRef(null)
-  const [ready,         setReady]         = useState(false)
-  const [capturedImg,   setCapturedImg]   = useState(null)
-  const [challenge,     setChallenge]     = useState(0)   // index into CHALLENGES
-  const [livenessOk,    setLivenessOk]    = useState(false)
-  const [capturing,     setCapturing]     = useState(false)
-  const [countdown,     setCountdown]     = useState(null)
-  const [error,         setError]         = useState(null)
+  const [ready,       setReady]       = useState(false)
+  const [capturedImg, setCapturedImg] = useState(null)
+  const [running,     setRunning]     = useState(false)
+  const [steps,       setSteps]       = useState([])      // [{id, prompt}] from the server
+  const [stepIdx,     setStepIdx]     = useState(-1)
+  const [countdown,   setCountdown]   = useState(null)
+  const [error,       setError]       = useState(null)
 
-  // Auto-advance challenge every 2 s
-  useEffect(() => {
-    if (!ready || livenessOk) return
-    const id = setTimeout(() => {
-      setChallenge((c) => {
-        if (c >= CHALLENGES.length - 1) {
-          setLivenessOk(true)
-          return c
-        }
-        return c + 1
-      })
-    }, 2000)
-    return () => clearTimeout(id)
-  }, [challenge, ready, livenessOk])
+  const shot = () => webcamRef.current?.getScreenshot({ width: 640, height: 480 })
 
-  const handleCapture = useCallback(async () => {
-    if (!webcamRef.current || capturing) return
-    setCapturing(true)
+  const startChallenge = useCallback(async () => {
+    if (!webcamRef.current || running) return
+    setRunning(true)
     setError(null)
+    try {
+      const challenge = await getLivenessChallenge(sessionId)
+      setSteps(challenge.steps)
 
-    // 3-second countdown
-    for (let i = 3; i >= 1; i--) {
-      setCountdown(i)
-      await new Promise((r) => setTimeout(r, 1000))
+      const frames = []
+      let selfie = null
+      const extraFrames = []
+
+      for (let i = 0; i < challenge.steps.length; i++) {
+        setStepIdx(i)
+        // Time to read the prompt and move the head, then hold still for the frame
+        for (let c = 3; c >= 1; c--) {
+          setCountdown(c)
+          await sleep(900)
+        }
+        setCountdown(null)
+
+        const frame = shot()
+        if (!frame) throw new Error('Could not capture image. Please allow camera access.')
+        frames.push(b64(frame))
+
+        if (i === 0) {
+          // The straight-ahead frame is the selfie used for the face match; a short burst after it
+          // feeds the server's static-image check.
+          selfie = frame
+          for (let k = 0; k < 4; k++) {
+            await sleep(250)
+            const f = shot()
+            if (f) extraFrames.push(b64(f))
+          }
+        }
+      }
+
+      setCapturedImg(selfie)
+      setStepIdx(-1)
+      onCapture({
+        base64: b64(selfie),
+        livenessVerified: true, // advisory only — the server decides from the frames below
+        extraFrames,
+        challenge: { challengeId: challenge.challenge_id, frames },
+      })
+    } catch (err) {
+      setStepIdx(-1)
+      setCountdown(null)
+      setError(err?.response?.data?.detail || err.message || 'Liveness check failed. Please try again.')
+    } finally {
+      setRunning(false)
     }
-    setCountdown(null)
-
-    const imageSrc = webcamRef.current.getScreenshot({ width: 640, height: 480 })
-    if (!imageSrc) {
-      setError('Could not capture image. Please allow camera access.')
-      setCapturing(false)
-      return
-    }
-
-    // Short burst of extra frames so the server can run temporal (static-image / replay) checks
-    const extraFrames = []
-    for (let i = 0; i < 4; i++) {
-      await new Promise((r) => setTimeout(r, 250))
-      const f = webcamRef.current?.getScreenshot({ width: 640, height: 480 })
-      if (f) extraFrames.push(f.split(',')[1])
-    }
-
-    setCapturedImg(imageSrc)
-    setCapturing(false)
-
-    // Pass base64 (strip data-URL prefix) and liveness flag to parent
-    const base64 = imageSrc.split(',')[1]
-    console.log('[WebcamCapture] captured frame', {
-      sessionId,
-      livenessOk,
-      payloadChars: base64.length,
-    })
-    onCapture({ base64, livenessVerified: livenessOk, extraFrames })
-  }, [capturing, livenessOk, onCapture])
+  }, [running, sessionId, onCapture])
 
   const handleRetake = () => {
     setCapturedImg(null)
-    setChallenge(0)
-    setLivenessOk(false)
+    setSteps([])
+    setStepIdx(-1)
   }
+
+  const current = steps[stepIdx]
 
   return (
     <div className="space-y-4">
-      {/* Liveness progress */}
-      {!capturedImg && (
+      {/* Progress */}
+      {!capturedImg && steps.length > 0 && (
         <div className="flex gap-2">
-          {CHALLENGES.map((c, i) => (
+          {steps.map((s, i) => (
             <div
-              key={c.id}
+              key={s.id}
               className={`flex-1 h-1 rounded-full transition-all duration-500 ${
-                i < challenge ? 'bg-primary' : i === challenge ? 'bg-primary/50 animate-pulse-slow' : 'bg-white/10'
+                i < stepIdx ? 'bg-primary' : i === stepIdx ? 'bg-primary/50 animate-pulse-slow' : 'bg-white/10'
               }`}
             />
           ))}
@@ -136,8 +139,8 @@ export default function WebcamCapture({ onCapture, sessionId }) {
         <AnimatePresence>
           {countdown && (
             <motion.div
-              key={countdown}
-              className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+              key={`${stepIdx}-${countdown}`}
+              className="absolute inset-0 flex items-center justify-center bg-black/30 backdrop-blur-sm"
               initial={{ opacity: 0, scale: 0.5 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 1.5 }}
@@ -150,44 +153,42 @@ export default function WebcamCapture({ onCapture, sessionId }) {
         </AnimatePresence>
       </div>
 
-      {/* Challenge instruction */}
-      {!capturedImg && ready && !livenessOk && (
+      {/* Current prompt */}
+      {!capturedImg && current && (
         <motion.div
-          key={challenge}
+          key={stepIdx}
           initial={{ opacity: 0, y: 5 }}
           animate={{ opacity: 1, y: 0 }}
           className="glass-card p-3 flex items-center gap-3"
         >
-          <span className="text-2xl">{CHALLENGES[challenge]?.icon}</span>
+          <span className="text-2xl">{ICONS[current.id]}</span>
           <div>
-            <p className="text-xs text-white/40 uppercase tracking-wider">Liveness Check</p>
-            <p className="text-sm font-medium text-white">{CHALLENGES[challenge]?.text}</p>
+            <p className="text-xs text-white/40 uppercase tracking-wider">
+              Liveness check — step {stepIdx + 1} of {steps.length}
+            </p>
+            <p className="text-sm font-medium text-white">{current.prompt}</p>
           </div>
         </motion.div>
       )}
 
-      {livenessOk && !capturedImg && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="glass-card p-3 flex items-center gap-3 border-success/30">
-          <span className="text-2xl">✅</span>
-          <p className="text-sm font-medium text-success">Liveness confirmed — ready to capture</p>
-        </motion.div>
+      {!capturedImg && !running && ready && (
+        <p className="text-xs text-white/40">
+          You will be asked to look straight, then turn your head left and right (the order is random).
+          Turn your head clearly towards the side of the screen you are asked — a photo can't do this.
+        </p>
       )}
 
       {/* Action buttons */}
       <div className="flex gap-3">
         {!capturedImg ? (
-          <button
-            onClick={handleCapture}
-            disabled={!ready || !livenessOk || capturing}
-            className="btn-primary flex-1"
-          >
-            {capturing ? (
+          <button onClick={startChallenge} disabled={!ready || running} className="btn-primary flex-1">
+            {running ? (
               <>
                 <span className="w-4 h-4 border-2 border-surface-900/50 border-t-surface-900 rounded-full animate-spin" />
-                Capturing…
+                Follow the prompts…
               </>
             ) : (
-              <>📸 Capture Face</>
+              <>📸 Start Liveness Check</>
             )}
           </button>
         ) : (

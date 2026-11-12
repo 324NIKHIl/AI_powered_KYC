@@ -125,7 +125,16 @@ MONGODB_URL=mongodb://localhost:27017
 MONGODB_DB_NAME=kyc_verification
 FACE_SIMILARITY_THRESHOLD=0.32
 DOCUMENT_CONFIDENCE_THRESHOLD=0.75
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=use-a-long-unique-password
+SECRET_KEY=generate-a-long-random-secret
 ```
+
+The admin section is available at `/admin/login`. Dashboard APIs require the bearer token issued
+after login. Admins can correct extracted identity fields and record an approval or rejection with
+a required reason. Corrections and decisions are timestamped in the record's `admin_audit` history;
+manual decisions are marked with `decision_source: MANUAL` and preserve the original automated
+decision in `automated_decision_snapshot`. Set unique credentials and a random secret before use.
 
 ---
 
@@ -251,7 +260,18 @@ Compare live webcam face against document face.
 
 ---
 
-### `GET /api/verification-history`
+### Admin API
+
+`POST /api/admin/login` accepts the configured `ADMIN_USERNAME` and `ADMIN_PASSWORD`; use its
+returned bearer token for `/api/verification-history`, `/api/stats`, deletion, and the admin mutation
+routes. `/api/verification/{session_id}` is also admin-authenticated; applicants see a submission
+confirmation after the liveness step, while detailed verification results are available in the admin area.
+
+`PUT /api/admin/verification/{session_id}/details` corrects extracted fields and requires a reason.
+`PUT /api/admin/verification/{session_id}/decision` accepts `APPROVED` or `REJECTED` and requires
+a reason. Both actions are added to the audit history.
+
+### `GET /api/verification-history` (admin bearer token required)
 
 Paginated list of all verifications.
 
@@ -309,7 +329,7 @@ Final KYC status, most severe first:
   REJECTED                 document INVALID, or face NO_MATCH
   MANUAL_REVIEW_REQUIRED   capture unusable (retake), UNCERTAIN face/liveness, REVIEW alteration, document needs a human
   VERIFICATION_UNAVAILABLE document needs an authoritative source/key that was unavailable
-  VERIFIED                 every layer passed with authoritative evidence
+  VERIFIED                 OCR read confidence rounds to 100% + face MATCH + liveness PASS, unless a document is INVALID/SUSPICIOUS or other suspicious signal exists
 ```
 
 Legacy `final_decision` is kept for the admin views: VERIFIED -> APPROVED, REJECTED/SUSPICIOUS -> REJECTED,
@@ -379,10 +399,13 @@ Upload -> type detection -> image quality -> OCR -> document-specific validation
        -> (live capture) liveness -> face match -> face-alteration analysis -> final KYC status
 ```
 
-`VALID`/`VERIFIED` is reachable only through **authoritative evidence**: a verified UIDAI QR signature, or a
-genuine (non-mock) match from a configured external provider, plus the document's required local checks.
-A provider that is down, rate-limited, mis-keyed or not configured gives `VERIFICATION_UNAVAILABLE`, never
-"verified". A mock provider is labelled `MOCK_VERIFICATION`, can never produce `VERIFIED`, and is disabled when
+Document status `VALID` still requires **authoritative evidence**: a verified UIDAI QR signature or a genuine
+(non-mock) match from a configured external provider, plus the document's required local checks. Overall KYC
+status `VERIFIED` can also result from the local rule of OCR read confidence that rounds to 100%, face `MATCH`, and liveness
+`PASS`, provided no document `INVALID`/`SUSPICIOUS` status or other suspicious signal exists. In that case the
+status message identifies that it was based on local checks; it does not claim issuer authenticity. When the
+local rule is not met and an authoritative provider is unavailable, the result remains
+`VERIFICATION_UNAVAILABLE`. Mock provider results remain labelled `MOCK_VERIFICATION` and are disabled when
 `APP_ENV=production`.
 
 ### Code map (`backend/services/kyc/`)

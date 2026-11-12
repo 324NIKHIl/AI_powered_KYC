@@ -10,7 +10,7 @@ import logging
 from fastapi import APIRouter, HTTPException, status
 
 from models.verification import FaceVerifyRequest, FaceVerifyResponse
-from services.verification_service import run_face_verification
+from services.verification_service import issue_liveness_challenge, run_face_verification
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -46,6 +46,8 @@ async def face_verify(payload: FaceVerifyRequest):
             live_face_b64=payload.live_face_base64,
             liveness_from_frontend=payload.liveness_verified,
             extra_frames_b64=payload.extra_frames_base64,
+            challenge_id=payload.challenge_id,
+            challenge_frames_b64=payload.challenge_frames_base64,
         )
     except Exception as exc:
         logger.exception("[%s] Face verification failed", payload.session_id)
@@ -56,6 +58,17 @@ async def face_verify(payload: FaceVerifyRequest):
 
     logger.info("[%s] Face verify complete kyc_status=%s", payload.session_id, result.kyc_status)
     return result
+
+
+@router.post("/liveness-challenge", summary="Issue a random single-use head-turn challenge for a session")
+async def liveness_challenge(payload: dict):
+    session_id = payload.get("session_id")
+    if not session_id or not isinstance(session_id, str):
+        raise HTTPException(status_code=400, detail="session_id is required")
+    challenge = await issue_liveness_challenge(session_id)
+    if challenge is None:
+        raise HTTPException(status_code=404, detail="Session not found. Please upload a document first.")
+    return challenge
 
 
 @router.post(
@@ -82,7 +95,7 @@ async def liveness_check(payload: dict):
     except Exception:
         raise HTTPException(status_code=400, detail="Could not decode the image")
     try:
-        result = assess_liveness(img, None, extra_imgs)
+        result = assess_liveness(img, None, extra_imgs, require_challenge=False)
     except Exception:
         logger.exception("Liveness check failed")
         raise HTTPException(status_code=500, detail="Liveness check failed")
