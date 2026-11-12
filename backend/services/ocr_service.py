@@ -174,6 +174,7 @@ def extract_text_full(img: np.ndarray) -> tuple[list[str], str]:
 
 # ── Field parsers ─────────────────────────────────────────────────────────────
 
+
 def _parse_name(lines: list[str], doc_type: DocumentType) -> Optional[str]:
     """
     Name extraction heuristics per document type.
@@ -188,51 +189,70 @@ def _parse_name(lines: list[str], doc_type: DocumentType) -> Optional[str]:
         ]
         if any(word in upper for word in blocked):
             return False
-        # OCR garbles the big header word ("Govemmenioklnd") — reject near-misspellings of it too
+
         for token in re.findall(r"[A-Z]+", upper):
-            if token.startswith("GOV") and len(token) >= 8 and SequenceMatcher(None, token[:10], "GOVERNMENT").ratio() >= 0.68:
+            if token.startswith("GOV") and len(token) >= 8 and SequenceMatcher(
+                None, token[:10], "GOVERNMENT"
+            ).ratio() >= 0.68:
                 return False
+
         if re.search(r"\d", value):
             return False
+
         return bool(re.match(r"^[A-Za-z][A-Za-z\s\.\-']{2,59}$", value.strip()))
 
     def best_name_candidate(candidates: list[str]) -> Optional[str]:
-        valid = [candidate.strip() for candidate in candidates if is_name_candidate(candidate)]
+        valid = [
+            candidate.strip()
+            for candidate in candidates
+            if is_name_candidate(candidate)
+        ]
+
         if not valid:
             return None
 
         def score(candidate: str) -> tuple[int, int]:
             words = candidate.split()
             value = 0
+
             if len(words) == 2:
                 value += 5
             elif len(words) == 3:
                 value += 3
-            if all(word[:1].isupper() and word[1:].islower() for word in words if word):
+
+            if all(
+                word[:1].isupper() and word[1:].islower()
+                for word in words if word
+            ):
                 value += 2
+
             if len(candidate) > 30:
                 value -= 3
+
             return value, len(candidate)
 
         return max(valid, key=score)
 
+    # Aadhaar and PAN name extraction
     if doc_type in (DocumentType.AADHAAR, DocumentType.PAN):
-        # Name usually appears after "Name:" or on its own line with title case
         for i, line in enumerate(lines):
             if re.search(r"\bNAME\b", line.upper()):
-                # Try next line
                 if i + 1 < len(lines):
                     candidate = lines[i + 1]
                     if is_name_candidate(candidate):
                         return candidate.strip().title()
-                # Or same line after colon
+
                 parts = re.split(r"[:|\-]", line, maxsplit=1)
                 if len(parts) > 1 and is_name_candidate(parts[1]):
                     return parts[1].strip().title()
 
+    # Aadhaar-specific name extraction
     if doc_type == DocumentType.AADHAAR:
         for i, line in enumerate(lines):
-            if re.search(r"\b(C[/\\]?I?O|C1O|S[/\\]?O|D[/\\]?O|W[/\\]?O|CARE OF)\b", line.upper()):
+            if re.search(
+                r"\b(C[/\\]?I?O|C1O|S[/\\]?O|D[/\\]?O|W[/\\]?O|CARE OF)\b",
+                line.upper()
+            ):
                 candidate = best_name_candidate(lines[max(0, i - 5):i])
                 if candidate and len(candidate.split()) >= 2:
                     return candidate.title()
@@ -243,28 +263,79 @@ def _parse_name(lines: list[str], doc_type: DocumentType) -> Optional[str]:
                 if candidate and len(candidate.split()) >= 2:
                     return candidate.title()
 
+    # Passport name extraction
     if doc_type == DocumentType.PASSPORT:
-        # Passport MRZ line 2 or explicit surname/given name fields
         for i, line in enumerate(lines):
             if "SURNAME" in line.upper() or "GIVEN" in line.upper():
                 parts = re.split(r"[:|\-]", line, maxsplit=1)
                 if len(parts) > 1 and re.match(r"^[A-Za-z\s]{3,50}$", parts[1]):
                     return parts[1].strip().title()
 
-    # Generic: find the longest all-alpha title-case string. OCR often splits "First Last" into two
-    # boxes, so neighbouring single words are also tried as a pair; multi-word names win over one word.
+    # NEW: Driving Licence name extraction
+    if doc_type == DocumentType.DRIVING_LICENCE:
+        for i, line in enumerate(lines):
+            match = re.search(
+                r"\bNAME\b\s*[:|\-]?\s*(.*)$",
+                line,
+                re.IGNORECASE
+            )
+
+            candidate = match.group(1).strip() if match else ""
+
+            # If NAME is on a separate line, read the next line
+            if not candidate and re.fullmatch(
+                r"\s*NAME\s*[:|\-]?\s*",
+                line,
+                re.IGNORECASE
+            ):
+                candidate = (
+                    lines[i + 1].strip()
+                    if i + 1 < len(lines)
+                    else ""
+                )
+
+            # Remove relationship and other field labels
+            candidate = re.split(
+                r"\b(?:S\s*/\s*D\s*/\s*W|S\s*/\s*O|D\s*/\s*O|W\s*/\s*O|ADDRESS|DOB|DATE\s+OF\s+BIRTH|BLOOD\s+GROUP)\b",
+                candidate,
+                maxsplit=1,
+                flags=re.IGNORECASE,
+            )[0]
+
+            candidate = re.sub(r"[^A-Za-z .'-]", " ", candidate)
+            candidate = re.sub(r"\s+", " ", candidate).strip(" .'-")
+
+            if is_name_candidate(candidate) and len(candidate.split()) >= 2:
+                return candidate.title()
+
+    # Generic name extraction (existing logic)
     title = re.compile(r"^[A-Z][a-z]+(\s+[A-Z][a-z]+){0,4}$")
-    candidates = [l.strip() for l in lines if is_name_candidate(l) and title.match(l.strip())]
+
+    candidates = [
+        l.strip()
+        for l in lines
+        if is_name_candidate(l) and title.match(l.strip())
+    ]
+
     for a, b in zip(lines, lines[1:]):
         pair = f"{a.strip()} {b.strip()}"
-        if is_name_candidate(a) and is_name_candidate(b) and title.match(a.strip()) and title.match(b.strip()) \
-                and " " not in a.strip() and " " not in b.strip():
+
+        if (
+            is_name_candidate(a)
+            and is_name_candidate(b)
+            and title.match(a.strip())
+            and title.match(b.strip())
+            and " " not in a.strip()
+            and " " not in b.strip()
+        ):
             candidates.append(pair)
+
     if candidates:
         multi = [c for c in candidates if len(c.split()) >= 2]
         return max(multi or candidates, key=len)
 
     return None
+
 
 
 _DOB_LABEL = re.compile(r"D\s*[O0o]\s*[B8]\b|DATE\s+OF\s+BIRTH|YEAR\s+OF\s+BIRTH|\bBIRTH\b", re.IGNORECASE)
@@ -391,6 +462,10 @@ def _parse_id_number(lines: list[str], doc_type: DocumentType) -> Optional[str]:
             return mrz.passport_number
         match = re.search(r"\b([A-Z]{1,2}\s?[0-9]{7,8})\b", full_text.upper())
         return re.sub(r"\s+", "", match.group(1)) if match else None
+
+    if doc_type == DocumentType.DRIVING_LICENCE:
+        from services.kyc.documents.driving_licence import find_licence_number
+        return find_licence_number(full_text)
 
     # College ID — look for numeric roll numbers
     match = re.search(r"\b([A-Z0-9]{4,12})\b", full_text.upper())

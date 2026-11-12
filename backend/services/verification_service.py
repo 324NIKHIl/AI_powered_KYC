@@ -4,7 +4,7 @@ then persists the result to MongoDB.
 """
 
 from __future__ import annotations
-
+import asyncio
 import logging
 import time
 import uuid
@@ -169,7 +169,11 @@ async def run_face_verification(
     # ── Liveness + face-alteration (server-side; run even if the match failed, for the audit trail) ──
     liveness = assess_liveness(live_img, face_box, extra_frames, client_challenge_passed=liveness_from_frontend,
                                challenge=challenge_result)
-    deepfake = assess_face_alteration(live_img, face_box)
+    deepfake = await asyncio.to_thread(
+        assess_face_alteration,
+        live_img,
+        face_box
+    )
 
     # ── Final identity decision ───────────────────────────────────────────────
     decision = decide_identity(
