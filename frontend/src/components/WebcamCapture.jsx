@@ -14,10 +14,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const b64 = (dataUrl) => dataUrl.split(',')[1]
 
 /**
- * Active liveness: the SERVER picks a random sequence of head turns (e.g. straight → left → right).
- * We show each prompt, count down so the user can get into position, and grab one frame per step.
- * The server measures the head angle in every frame itself — nothing here proves liveness, so a
- * photo or a phone screen held up to the camera cannot pass by "completing" the steps.
+ * Active liveness: the server chooses a left/right order and checks the requested yaw direction.
  */
 export default function WebcamCapture({ onCapture, sessionId }) {
   const webcamRef = useRef(null)
@@ -45,7 +42,7 @@ export default function WebcamCapture({ onCapture, sessionId }) {
 
       for (let i = 0; i < challenge.steps.length; i++) {
         setStepIdx(i)
-        // Time to read the prompt and move the head, then hold still for the frame
+        // Time to read the prompt and move the head, then hold still for the frame.
         for (let c = 3; c >= 1; c--) {
           setCountdown(c)
           await sleep(900)
@@ -54,17 +51,18 @@ export default function WebcamCapture({ onCapture, sessionId }) {
 
         const frame = shot()
         if (!frame) throw new Error('Could not capture image. Please allow camera access.')
-        frames.push(b64(frame))
 
         if (i === 0) {
-          // The straight-ahead frame is the selfie used for the face match; a short burst after it
-          // feeds the server's static-image check.
+          // The straight-ahead frame is the selfie used for the face match.
           selfie = frame
+          frames.push(b64(frame))
           for (let k = 0; k < 4; k++) {
             await sleep(250)
             const f = shot()
             if (f) extraFrames.push(b64(f))
           }
+        } else {
+          frames.push(b64(frame))
         }
       }
 
@@ -173,8 +171,7 @@ export default function WebcamCapture({ onCapture, sessionId }) {
 
       {!capturedImg && !running && ready && (
         <p className="text-xs text-white/40">
-          You will be asked to look straight, then turn your head left and right (the order is random).
-          Turn your head clearly towards the side of the screen you are asked — a photo can't do this.
+          Look straight at the camera, then slowly turn toward each direction shown. A turn beyond the minimum still passes.
         </p>
       )}
 

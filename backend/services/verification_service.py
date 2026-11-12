@@ -5,6 +5,7 @@ then persists the result to MongoDB.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -169,7 +170,9 @@ async def run_face_verification(
     # ── Liveness + face-alteration (server-side; run even if the match failed, for the audit trail) ──
     liveness = assess_liveness(live_img, face_box, extra_frames, client_challenge_passed=liveness_from_frontend,
                                challenge=challenge_result)
-    deepfake = assess_face_alteration(live_img, face_box)
+    # Model initialization may fetch weights on first use; keep inference off the
+    # event loop so one cold start does not stall other verification requests.
+    deepfake = await asyncio.to_thread(assess_face_alteration, live_img, face_box)
 
     # ── Final identity decision ───────────────────────────────────────────────
     decision = decide_identity(
@@ -244,7 +247,7 @@ async def run_face_verification(
 
 
 async def issue_liveness_challenge(session_id: str) -> Optional[dict]:
-    """Create (and store) a fresh random head-turn challenge for the session; None if no such session."""
+    """Create and store a fresh randomized head-turn challenge; None if no such session."""
     if not await get_session(session_id):
         return None
     ch = new_challenge()
@@ -253,7 +256,7 @@ async def issue_liveness_challenge(session_id: str) -> Optional[dict]:
 
 
 async def _verify_head_turn(session_id, session, challenge_id, frames_b64) -> Optional[ChallengeResult]:
-    """Check the submitted head-turn frames against the stored challenge. None = no usable challenge."""
+    """Check submitted baseline/turn frames. None means no usable challenge."""
     ch = session.get("liveness_challenge")
     problem = check_challenge_usable(ch, challenge_id)
     if problem:

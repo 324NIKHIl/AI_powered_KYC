@@ -129,7 +129,7 @@ class FaceVerifyRequest(BaseModel):
     extra_frames_base64: list[Annotated[str, StringConstraints(max_length=14_000_000)]] = Field(
         default_factory=list, max_length=8
     )
-    # Head-turn challenge: the id issued by POST /liveness-challenge and one frame per step, in order
+    # Challenge id and one baseline/turn frame per step issued by /liveness-challenge
     challenge_id: Optional[str] = None
     challenge_frames_base64: list[Annotated[str, StringConstraints(max_length=14_000_000)]] = Field(
         default_factory=list, max_length=6

@@ -60,7 +60,7 @@ def decide_identity(
     extra_tamper_flags: list[str],
     similarity: float = 0.0,
 ) -> IdentityDecision:
-    from services.kyc.config import deepfake_high_threshold, deepfake_review_threshold
+    from services.kyc.config import deepfake_review_threshold
 
     suspicious: list[str] = []
     rejected: list[str] = []
@@ -72,9 +72,6 @@ def decide_identity(
     suspicious.extend(extra_tamper_flags)
     if liveness and liveness.status == LivenessStatus.FAIL:
         suspicious.append("Live capture looks like a presentation attack: " + "; ".join(liveness.reasons or ["screen/print artefacts"]))
-    if deepfake and deepfake.risk >= deepfake_high_threshold():
-        suspicious.append("Live capture shows signs of face manipulation: " + "; ".join(deepfake.reasons or ["synthetic-face indicators"]))
-
     if document_status == "INVALID":
         rejected.append("Document failed validation")
     if face_status == FaceMatch.NO_MATCH:
@@ -88,8 +85,18 @@ def decide_identity(
         manual.append(f"Face similarity ({similarity:.2f}) is inconclusive")
     if liveness and liveness.status == LivenessStatus.UNCERTAIN:
         manual.append("Liveness could not be confirmed" + (": " + "; ".join(liveness.reasons) if liveness.reasons else ""))
-    if deepfake and deepfake_between(deepfake, deepfake_review_threshold(), deepfake_high_threshold()):
-        manual.append("Possible face alteration — review the capture")
+    deepfake_review_required = bool(
+        deepfake and (
+            deepfake.risk >= deepfake_review_threshold()
+            or (deepfake.model_fake_probability is not None
+                and deepfake.model_fake_probability >= deepfake_review_threshold())
+        )
+    )
+    if deepfake_review_required:
+        manual.append(
+            "Face alteration signal requires manual review"
+            + (": " + "; ".join(deepfake.reasons) if deepfake and deepfake.reasons else "")
+        )
     if capture_issue:
         manual.append(capture_issue)
 
@@ -115,7 +122,8 @@ def decide_identity(
         and liveness is not None
         and liveness.status == LivenessStatus.PASS
     )
-    if local_checks_passed and not suspicious and document_status != "INVALID":
+    if (local_checks_passed and not suspicious and not deepfake_review_required
+            and document_status != "INVALID"):
         return IdentityDecision(
             KycStatus.VERIFIED,
             ["Local checks passed: document read confidence is 100%, face matched, and liveness passed. "
@@ -127,6 +135,8 @@ def decide_identity(
         return IdentityDecision(KycStatus.SUSPICIOUS, suspicious + rejected, max(risk, 0.8))
     if rejected:
         return IdentityDecision(KycStatus.REJECTED, rejected, max(risk, 0.7))
+    if deepfake_review_required:
+        return IdentityDecision(KycStatus.MANUAL_REVIEW_REQUIRED, manual + unavailable, risk)
     if capture_issue:
         return IdentityDecision(KycStatus.MANUAL_REVIEW_REQUIRED, manual + unavailable, risk)
     if unavailable:
@@ -134,7 +144,3 @@ def decide_identity(
     if manual:
         return IdentityDecision(KycStatus.MANUAL_REVIEW_REQUIRED, manual, risk)
     return IdentityDecision(KycStatus.VERIFIED, [], risk)
-
-
-def deepfake_between(d: DeepfakeResult, low: float, high: float) -> bool:
-    return low <= d.risk < high

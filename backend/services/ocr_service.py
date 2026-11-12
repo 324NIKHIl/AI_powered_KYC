@@ -230,6 +230,25 @@ def _parse_name(lines: list[str], doc_type: DocumentType) -> Optional[str]:
                 if len(parts) > 1 and is_name_candidate(parts[1]):
                     return parts[1].strip().title()
 
+    if doc_type == DocumentType.DRIVING_LICENCE:
+        # Indian licences commonly print the value in uppercase on the same
+        # line as "Name:". The generic fallback below accepts title case only.
+        for i, line in enumerate(lines):
+            match = re.search(r"\bNAME\b\s*[:|\-]?\s*(.*)$", line, re.IGNORECASE)
+            candidate = match.group(1).strip() if match else ""
+            if not candidate and re.fullmatch(r"\s*NAME\s*[:|\-]?\s*", line, re.IGNORECASE):
+                candidate = lines[i + 1].strip() if i + 1 < len(lines) else ""
+            candidate = re.split(
+                r"\b(?:S\s*/\s*D\s*/\s*W|S\s*/\s*O|D\s*/\s*O|W\s*/\s*O|ADDRESS|DOB|DATE\s+OF\s+BIRTH|BLOOD\s+GROUP)\b",
+                candidate,
+                maxsplit=1,
+                flags=re.IGNORECASE,
+            )[0]
+            candidate = re.sub(r"[^A-Za-z .'-]", " ", candidate)
+            candidate = re.sub(r"\s+", " ", candidate).strip(" .'-")
+            if is_name_candidate(candidate) and len(candidate.split()) >= 2:
+                return candidate.title()
+
     if doc_type == DocumentType.AADHAAR:
         for i, line in enumerate(lines):
             if re.search(r"\b(C[/\\]?I?O|C1O|S[/\\]?O|D[/\\]?O|W[/\\]?O|CARE OF)\b", line.upper()):
@@ -388,6 +407,11 @@ def _parse_id_number(lines: list[str], doc_type: DocumentType) -> Optional[str]:
             return mrz.passport_number
         match = re.search(r"\b([A-Z]{1,2}\s?[0-9]{7,8})\b", full_text.upper())
         return re.sub(r"\s+", "", match.group(1)) if match else None
+
+    if doc_type == DocumentType.DRIVING_LICENCE:
+        from services.kyc.documents.driving_licence import find_licence_number
+
+        return find_licence_number(full_text)
 
     # College ID — look for numeric roll numbers
     match = re.search(r"\b([A-Z0-9]{4,12})\b", full_text.upper())

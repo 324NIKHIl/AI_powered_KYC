@@ -1,11 +1,9 @@
 """
 Active liveness: a server-issued, random, single-use head-turn challenge.
 
-The server picks the sequence (straight → turn one way → turn the other way, order random), the
-browser captures one frame per step, and the *server* measures the head yaw in every frame from the
-MTCNN landmarks: yaw = (nose_x − eye_midpoint_x) / eye_distance. A real head turning moves the nose
-sideways relative to the eyes; a photo/screen held up to the camera keeps that ratio almost
-constant, so it cannot follow a random prompt. Nothing the browser claims is trusted.
+The browser captures one frame for each step. The server measures normalized yaw from MTCNN
+landmarks and checks a minimum directional change of 0.12 for each requested turn. Nothing the
+browser claims is trusted.
 
 Limits: a pre-recorded video of the person (or a virtual camera) can still follow prompts; this is
 not certified PAD. Layer a vendor/ML PAD model behind `assess_liveness` for high-assurance use.
@@ -30,11 +28,11 @@ PROMPTS = {
     "left":   "Slowly turn your head to the LEFT",
     "right":  "Slowly turn your head to the RIGHT",
 }
-MAX_START_YAW = 0.20     # the first (straight) frame must be roughly frontal
+MAX_START_YAW = 0.20
 
 
 def new_challenge() -> dict:
-    """A fresh challenge document (stored in the session; the browser only gets id + steps)."""
+    """Issue a baseline and a randomized left/right turn sequence."""
     turns = ["left", "right"]
     if secrets.randbelow(2):
         turns.reverse()
@@ -83,7 +81,7 @@ class ChallengeResult:
 
 
 def measure_yaw(frame: np.ndarray, detect: Optional[Callable] = None) -> Optional[float]:
-    """Signed yaw ratio of the largest face (image coordinates), or None if no face was found."""
+    """Signed normalized yaw ratio, or None when no usable face is found."""
     if detect is None:
         from utils.image_processing import detect_faces
         detect = detect_faces
@@ -99,11 +97,11 @@ def measure_yaw(frame: np.ndarray, detect: Optional[Callable] = None) -> Optiona
 
 
 def evaluate(steps: Sequence[str], yaws: Sequence[Optional[float]], frames_distinct: bool = True) -> ChallengeResult:
-    """Decide the challenge from the measured yaw of each step's frame."""
+    """Pass only when both requested directional yaw changes meet the minimum."""
     yaws = list(yaws)
-    if len(yaws) != len(steps) or steps[0] != "center":
+    if len(yaws) != len(steps) or not steps or steps[0] != "center":
         return ChallengeResult("FAIL", ["the head-turn frames do not match the challenge"], yaws)
-    if any(y is None for y in yaws):
+    if any(yaw is None for yaw in yaws):
         return ChallengeResult("UNCERTAIN", ["no face found in one of the head-turn frames — retake"], yaws)
     if not frames_distinct:
         return ChallengeResult("FAIL", ["head-turn frames are identical — static image"], yaws)
@@ -113,17 +111,15 @@ def evaluate(steps: Sequence[str], yaws: Sequence[Optional[float]], frames_disti
         return ChallengeResult("UNCERTAIN", ["face was not looking straight at the start — retake"], yaws)
 
     need = liveness_min_turn_ratio()
-    reasons: list[str] = []
-    for step, y in zip(steps[1:], yaws[1:]):
-        delta = y - base
-        # The submitted webcam frames produce a positive yaw delta for the prompted
-        # left turn and a negative delta for the prompted right turn.
-        ok = delta >= need if step == "left" else delta <= -need
+    reasons = []
+    for step, yaw in zip(steps[1:], yaws[1:]):
+        delta = yaw - base
+        # The webcam preview is mirrored for the user, while submitted pixels are not.
+        # On this pipeline the user's left turn therefore produces a negative yaw delta.
+        ok = delta <= -need if step == "left" else delta >= need
         if not ok:
             reasons.append(f"head did not turn {step} as asked (change {delta:+.2f}, needed {need:.2f})")
-    if reasons:
-        return ChallengeResult("FAIL", reasons, yaws)
-    return ChallengeResult("PASS", [], yaws)
+    return ChallengeResult("FAIL", reasons, yaws) if reasons else ChallengeResult("PASS", [], yaws)
 
 
 def verify_challenge(
