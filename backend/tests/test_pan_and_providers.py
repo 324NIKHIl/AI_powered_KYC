@@ -170,3 +170,13 @@ async def test_provider_never_raises_into_workflow(make_ctx, monkeypatch):
     monkeypatch.setattr(type(provider), "verify", lambda self, req: boom(req))
     v = await run(make_ctx(DocumentType.PAN, PAN_LINES))
     assert v.status == DocStatus.VERIFICATION_UNAVAILABLE
+
+
+def test_pan_candidates_do_not_join_separate_ocr_entries():
+    assert detect_pan_candidates(["ABCDE", "1234F"]) == []
+    assert detect_pan_candidates(["ABCDE", "1234F"], strict=True) == []
+
+
+def test_pan_candidates_detect_valid_pan_within_ocr_entry():
+    assert "ABCPK1234F" in detect_pan_candidates(["PAN: ABCPK 1234F"])
+    assert "ABCPK1234F" in detect_pan_candidates(["PAN ABCPKI234F"])

@@ -374,9 +374,12 @@ def _parse_id_number(lines: list[str], doc_type: DocumentType) -> Optional[str]:
         return None
 
     if doc_type == DocumentType.PAN:
-        clean = re.sub(r"[^A-Z0-9]", "", full_text.upper())
-        match = re.search(r"([A-Z]{5}[0-9]{4}[A-Z])", clean)
-        return match.group(1) if match else None
+        for line in lines:
+            clean = re.sub(r"[^A-Z0-9]", "", line.upper())
+            match = re.search(r"([A-Z]{5}[0-9]{4}[A-Z])", clean)
+            if match:
+                return match.group(1)
+        return None
 
     if doc_type == DocumentType.PASSPORT:
         # Prefer the ICAO MRZ, which also supports passports with a two-letter

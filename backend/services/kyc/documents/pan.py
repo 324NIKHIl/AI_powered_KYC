@@ -51,32 +51,36 @@ def _repair(token: str, max_changes: int = 2) -> Optional[str]:
     return repaired if changes <= max_changes and PAN_RE.fullmatch(repaired) else None
 
 
-def detect_pan_candidates(text: str, *, strict: bool = False) -> list[str]:
+def detect_pan_candidates(text: str | list[str], *, strict: bool = False) -> list[str]:
     """
-    Independent pass over the raw OCR text (distinct from the parsed id_number field).
-    Strict matches are exact PAN-shaped strings. Unless `strict`, OCR-repaired matches are
-    only offered when no exact match exists (so repairs can never invent a second PAN).
+    Detect PAN candidates independently within each OCR entry.
+    Never concatenate separate entries, as that can manufacture PAN-shaped values.
+    OCR-repaired matches are only offered when no exact match exists.
     """
-    cleaned = clean_alnum(text)
+    entries = text.splitlines() if isinstance(text, str) else text
     exact: list[str] = []
-    for m in re.finditer(r"(?=([A-Z]{5}[0-9]{4}[A-Z]))", cleaned):
-        if m.group(1) not in exact:
-            exact.append(m.group(1))
-    if exact or strict:
-        return exact
     repaired: list[str] = []
-    for m in re.finditer(r"(?=([A-Z0-9]{10}))", cleaned):
-        pan = _repair(m.group(1))
-        if pan and pan not in repaired:
-            repaired.append(pan)
-    return repaired
+
+    for entry in entries:
+        cleaned = clean_alnum(entry)
+        for m in re.finditer(r"(?=([A-Z]{5}[0-9]{4}[A-Z]))", cleaned):
+            if m.group(1) not in exact:
+                exact.append(m.group(1))
+
+        if not strict:
+            for m in re.finditer(r"(?=([A-Z0-9]{10}))", cleaned):
+                pan = _repair(m.group(1))
+                if pan and pan not in repaired:
+                    repaired.append(pan)
+
+    return exact if exact or strict else repaired
 
 
 def verify_sync(ctx: DocContext) -> tuple[DocumentVerification, Optional[str]]:
     v = start(ctx, "PAN", "PAN card")
     parsed = (ctx.fields.id_number or "").strip().upper() or None
-    candidates = detect_pan_candidates(ctx.full_text)
-    exact_candidates = detect_pan_candidates(ctx.full_text, strict=True)
+    candidates = detect_pan_candidates(ctx.lines)
+    exact_candidates = detect_pan_candidates(ctx.lines, strict=True)
     pan = parsed if pan_format_valid(parsed) else None
 
     # Layer 1 — format
