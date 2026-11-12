@@ -1,11 +1,12 @@
 import { motion } from 'framer-motion'
 
 const STEPS = [
-  { id: 1, label: 'Upload Document', icon: '📄' },
-  { id: 2, label: 'OCR Preview',     icon: '🔍' },
-  { id: 3, label: 'Face Capture',    icon: '📸' },
-  { id: 4, label: 'Processing',      icon: '⚙️'  },
-  { id: 5, label: 'Result',          icon: '✅' },
+  { id: 1, label: 'Your Details',    icon: '👤' },
+  { id: 2, label: 'Upload Document', icon: '📄' },
+  { id: 3, label: 'OCR Preview',     icon: '🔍' },
+  { id: 4, label: 'Face Capture',    icon: '📸' },
+  { id: 5, label: 'Processing',      icon: '⚙️'  },
+  { id: 6, label: 'Result',          icon: '✅' },
 ]
 
 export default function ProgressSteps({ currentStep }) {

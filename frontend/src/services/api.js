@@ -5,6 +5,12 @@ const api = axios.create({
   timeout: 300_000,  // 5 minutes for heavy processing (OCR, face extraction, etc.)
 })
 
+api.interceptors.request.use((config) => {
+  const token = sessionStorage.getItem('adminToken')
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
+
 // ── Interceptors ─────────────────────────────────────────────────────────────
 api.interceptors.response.use(
   (res) => {
@@ -12,6 +18,11 @@ api.interceptors.response.use(
     return res
   },
   (err) => {
+    if (err.response?.status === 401 && !err.config?.url?.includes('/admin/login')) {
+      sessionStorage.removeItem('adminToken')
+      sessionStorage.removeItem('adminUsername')
+      if (window.location.pathname.startsWith('/admin')) window.location.assign('/admin/login')
+    }
     let message =
       err.response?.data?.detail ||
       err.response?.data?.message ||
@@ -36,11 +47,17 @@ api.interceptors.response.use(
  * @param {File} file
  * @param {string} [sessionId]
  * @param {Function} [onProgress] - (percent: number) => void
+ * @param {{documentType: string, fullName?: string, dob?: string, phone?: string}} [details]
+ *        documentType is mandatory (the backend rejects the upload without it)
  */
-export async function uploadDocument(file, sessionId = '', onProgress) {
+export async function uploadDocument(file, sessionId = '', onProgress, details = {}) {
   const form = new FormData()
   form.append('file', file)
   if (sessionId) form.append('session_id', sessionId)
+  form.append('document_type', details.documentType || '')
+  if (details.fullName) form.append('full_name', details.fullName)
+  if (details.dob)      form.append('dob', details.dob)
+  if (details.phone)    form.append('phone', details.phone)
 
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 300_000) // 5 minute timeout
@@ -88,13 +105,24 @@ export async function uploadAadhaarQr(sessionId, file) {
  * @param {string} liveFrameBase64 - base64 JPEG captured from webcam
  * @param {boolean} livenessVerified - whether frontend liveness challenge passed
  */
-export async function verifyFace(sessionId, liveFrameBase64, livenessVerified = false, extraFrames = []) {
+export async function verifyFace(sessionId, liveFrameBase64, livenessVerified = false, extraFrames = [], challenge = null) {
   const { data } = await api.post('/face-verify', {
+    challenge_id:            challenge?.challengeId ?? null,
+    challenge_frames_base64: challenge?.frames ?? [],
     session_id:        sessionId,
     live_face_base64:  liveFrameBase64,
     liveness_verified: livenessVerified,
     extra_frames_base64: extraFrames,
   })
+  return data
+}
+
+/**
+ * Ask the server for a random, single-use head-turn challenge.
+ * Resolves to { challenge_id, steps: [{ id: 'center'|'left'|'right', prompt }], expires_in }.
+ */
+export async function getLivenessChallenge(sessionId) {
+  const { data } = await api.post('/liveness-challenge', { session_id: sessionId })
   return data
 }
 
@@ -126,8 +154,38 @@ export async function getVerificationDetail(sessionId) {
   return data
 }
 
+export async function getVerificationFaceImage(sessionId, imageType) {
+  const { data } = await api.get(`/admin/verification/${sessionId}/face-image/${imageType}`, { responseType: 'blob' })
+  if (!data.type?.startsWith('image/')) {
+    throw new Error('The backend face-image route is unavailable. Restart the backend and refresh this page.')
+  }
+  return data
+}
+
 export async function deleteVerification(sessionId) {
   await api.delete(`/verification/${sessionId}`)
+}
+
+export async function loginAdmin(username, password) {
+  const { data } = await api.post('/admin/login', { username, password })
+  sessionStorage.setItem('adminToken', data.access_token)
+  sessionStorage.setItem('adminUsername', data.username)
+  return data
+}
+
+export function logoutAdmin() {
+  sessionStorage.removeItem('adminToken')
+  sessionStorage.removeItem('adminUsername')
+}
+
+export async function updateVerificationDetails(sessionId, extracted_fields, reason) {
+  const { data } = await api.put(`/admin/verification/${sessionId}/details`, { extracted_fields, reason })
+  return data
+}
+
+export async function recordManualDecision(sessionId, decision, reason) {
+  const { data } = await api.put(`/admin/verification/${sessionId}/decision`, { decision, reason })
+  return data
 }
 
 export default api

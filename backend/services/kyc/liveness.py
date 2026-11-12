@@ -22,7 +22,7 @@ from typing import Optional, Sequence
 import cv2
 import numpy as np
 
-from services.kyc.config import liveness_fail_threshold, liveness_uncertain_threshold
+from services.kyc.config import liveness_fail_threshold, liveness_require_challenge, liveness_uncertain_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +120,8 @@ def assess_liveness(
     face_box: Optional[Sequence[int]] = None,
     extra_frames: Sequence[np.ndarray] = (),
     client_challenge_passed: Optional[bool] = None,
+    challenge=None,                      # services.kyc.challenge.ChallengeResult from the server-verified head turn
+    require_challenge: Optional[bool] = None,
 ) -> LivenessResult:
     face = _crop(frame, face_box)
     signals = {
@@ -161,8 +163,25 @@ def assess_liveness(
     if client_challenge_passed is False and status == LivenessStatus.PASS:
         status = LivenessStatus.UNCERTAIN
         reasons.append("the on-screen liveness challenge was not completed")
+    # Active head-turn challenge (verified by the server). Without it a PASS is not possible.
+    need = liveness_require_challenge() if require_challenge is None else require_challenge
+    method = "passive-heuristic"
+    if challenge is not None:
+        method = "passive-heuristic+head-turn"
+        signals["head_turn"] = 0.0 if challenge.passed else 1.0
+        if challenge.status == "FAIL":
+            status = LivenessStatus.FAIL
+            attack = max(attack, 0.9)
+            reasons.extend(challenge.reasons)
+        elif challenge.status != "PASS":
+            if status == LivenessStatus.PASS:
+                status = LivenessStatus.UNCERTAIN
+            reasons.extend(challenge.reasons)
+    elif need and status == LivenessStatus.PASS:
+        status = LivenessStatus.UNCERTAIN
+        reasons.append("the head-turn liveness challenge was not completed")
     if temporal is None and status == LivenessStatus.PASS:
         reasons.append("single frame only — temporal checks were not possible")
 
     logger.info("liveness status=%s attack=%.3f frames=%d", status.value, attack, 1 + len(extra_frames))
-    return LivenessResult(status, attack, signals, reasons, frames_analysed=1 + len(extra_frames))
+    return LivenessResult(status, attack, signals, reasons, frames_analysed=1 + len(extra_frames), method=method)

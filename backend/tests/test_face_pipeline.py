@@ -9,6 +9,7 @@ import pytest
 from models.verification import KycStatus, RejectionReason
 from services import verification_service as vs
 from services.face_service import FaceMatchResult
+from services.kyc.challenge import ChallengeResult
 from tests.test_liveness_identity import BOX, moire, skin_frame
 
 
@@ -31,6 +32,11 @@ def harness(monkeypatch):
         return FaceMatchResult(verified=state["reason"] is None, similarity=state["similarity"],
                                rejection_reason=state["reason"], live_face_box=BOX if state["reason"] is None else None)
 
+    async def head_turn(*_a, **_k):
+        return state["challenge"]
+
+    state["challenge"] = ChallengeResult("PASS")
+    monkeypatch.setattr(vs, "_verify_head_turn", head_turn)
     monkeypatch.setattr(vs, "get_session", get_session)
     monkeypatch.setattr(vs, "_upsert_verification", upsert)
     monkeypatch.setattr(vs, "verify_faces", fake_verify_faces)
@@ -117,3 +123,18 @@ async def test_bad_extra_frames_do_not_crash(harness):
     f, _ = live_frames()
     r = await vs.run_face_verification("sid", b64(f), True, ["not-base64!!", "AAAA"])
     assert r.kyc_status is not None
+
+
+async def test_no_head_turn_challenge_cannot_be_verified(harness):
+    """A still photo can't follow the random prompts; missing/failed challenge blocks auto-approval."""
+    f, extra = live_frames()
+    harness["challenge"] = None
+    r = await run(f, extra)
+    assert r.liveness["status"] == "UNCERTAIN" and not r.verified
+
+
+async def test_failed_head_turn_fails_liveness(harness):
+    f, extra = live_frames()
+    harness["challenge"] = ChallengeResult("FAIL", ["head did not turn left as asked"])
+    r = await run(f, extra)
+    assert r.liveness["status"] == "FAIL" and not r.verified

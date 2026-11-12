@@ -1,20 +1,26 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts'
-import { getVerificationHistory, getStats, deleteVerification } from '../services/api'
+import { getVerificationHistory, getStats, deleteVerification, updateVerificationDetails, recordManualDecision, logoutAdmin } from '../services/api'
 import StatusBadge from '../components/StatusBadge'
 
 const COLORS = { APPROVED: '#10B981', REJECTED: '#EF4444', PENDING: '#F59E0B' }
 
 export default function AdminDashboard() {
+  const navigate = useNavigate()
+  const location = useLocation()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [stats,    setStats]    = useState(null)
   const [records,  setRecords]  = useState([])
   const [total,    setTotal]    = useState(0)
-  const [page,     setPage]     = useState(1)
-  const [filter,   setFilter]   = useState('')
+  const [page,     setPage]     = useState(() => Math.max(1, Number(searchParams.get('page')) || 1))
+  const [filter,   setFilter]   = useState(() => searchParams.get('decision') || '')
   const [loading,  setLoading]  = useState(true)
   const [error,    setError]    = useState(null)
+  const [editing, setEditing] = useState(null)
+  const [editReason, setEditReason] = useState('')
+  const [saving, setSaving] = useState(false)
 
   const LIMIT = 10
 
@@ -38,6 +44,21 @@ export default function AdminDashboard() {
 
   useEffect(() => { loadData() }, [loadData])
 
+  useEffect(() => {
+    const params = new URLSearchParams()
+    if (page > 1) params.set('page', String(page))
+    if (filter) params.set('decision', filter)
+    setSearchParams(params, { replace: true })
+  }, [page, filter, setSearchParams])
+
+  useEffect(() => {
+    if (!loading && sessionStorage.getItem('adminDashboardScrollY') !== null) {
+      const scrollY = Number(sessionStorage.getItem('adminDashboardScrollY')) || 0
+      sessionStorage.removeItem('adminDashboardScrollY')
+      requestAnimationFrame(() => window.scrollTo(0, scrollY))
+    }
+  }, [loading])
+
   async function handleDelete(sessionId) {
     if (!confirm('Delete this verification record?')) return
     try {
@@ -46,6 +67,31 @@ export default function AdminDashboard() {
     } catch (err) {
       alert(err.message)
     }
+  }
+
+  async function handleDecision(sessionId, decision) {
+    const reason = window.prompt(`Reason for manually ${decision.toLowerCase()} this verification:`)
+    if (reason === null) return
+    if (reason.trim().length < 3) { window.alert('Please enter a reason (at least 3 characters).'); return }
+    try {
+      await recordManualDecision(sessionId, decision, reason.trim())
+      await loadData()
+    } catch (err) { setError(err.message) }
+  }
+
+  async function saveDetails(event) {
+    event.preventDefault()
+    if (!editReason.trim()) return
+    setSaving(true)
+    try {
+      const extracted_fields = Object.fromEntries(new FormData(event.currentTarget).entries())
+      delete extracted_fields.reason
+      await updateVerificationDetails(editing.session_id, extracted_fields, editReason.trim())
+      setEditing(null)
+      setEditReason('')
+      await loadData()
+    } catch (err) { setError(err.message) }
+    finally { setSaving(false) }
   }
 
   const pieData = stats ? [
@@ -73,6 +119,7 @@ export default function AdminDashboard() {
           <button onClick={loadData} className="btn-secondary text-sm px-4 py-2">
             ↻ Refresh
           </button>
+          <button onClick={() => { logoutAdmin(); navigate('/admin/login', { replace: true }) }} className="btn-secondary text-sm px-4 py-2">Sign out</button>
         </div>
 
         {error && (
@@ -200,7 +247,15 @@ export default function AdminDashboard() {
                       </td>
                       <td className="px-6 py-4 text-center">
                         <div className="flex items-center justify-center gap-2">
-                          <Link to={`/result/${r.session_id}`} className="text-primary hover:underline text-xs">View</Link>
+                          <Link
+                            to={`/result/${r.session_id}`}
+                            state={{ returnTo: `${location.pathname}${location.search}` }}
+                            onClick={() => sessionStorage.setItem('adminDashboardScrollY', String(window.scrollY))}
+                            className="text-primary hover:underline text-xs"
+                          >View</Link>
+                          <button onClick={() => { setEditing(r); setEditReason('') }} className="text-primary hover:underline text-xs">Edit</button>
+                          <button onClick={() => handleDecision(r.session_id, 'APPROVED')} className="text-success hover:underline text-xs">Approve</button>
+                          <button onClick={() => handleDecision(r.session_id, 'REJECTED')} className="text-danger hover:underline text-xs">Reject</button>
                           <button onClick={() => handleDelete(r.session_id)} className="text-danger/50 hover:text-danger text-xs transition-colors">Del</button>
                         </div>
                       </td>
@@ -224,6 +279,25 @@ export default function AdminDashboard() {
           )}
         </div>
       </div>
+      {editing && (
+        <div className="fixed inset-0 z-[10000] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="edit-title">
+          <form onSubmit={saveDetails} className="glass-card w-full max-w-xl p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-start justify-between gap-4">
+              <div><h2 id="edit-title" className="text-xl font-bold">Correct extracted details</h2><p className="text-xs text-white/40 mt-1">{editing.session_id}</p></div>
+              <button type="button" onClick={() => setEditing(null)} className="text-white/50 hover:text-white" aria-label="Close">✕</button>
+            </div>
+            {['name', 'dob', 'gender', 'id_number', 'address'].map(field => (
+              <label key={field} className="block text-sm text-white/60 capitalize">{field.replace('_', ' ')}
+                <input name={field} defaultValue={editing.extracted_fields?.[field] || ''} className="input-field mt-1" />
+              </label>
+            ))}
+            <label className="block text-sm text-white/60">Reason for correction
+              <textarea required minLength={3} maxLength={1000} value={editReason} onChange={e => setEditReason(e.target.value)} className="input-field mt-1 min-h-24" />
+            </label>
+            <div className="flex justify-end gap-3"><button type="button" onClick={() => setEditing(null)} className="btn-secondary">Cancel</button><button disabled={saving} className="btn-primary">{saving ? 'Saving…' : 'Save correction'}</button></div>
+          </form>
+        </div>
+      )}
     </div>
   )
 }

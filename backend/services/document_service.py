@@ -21,7 +21,9 @@ from models.verification import (
 from services.aadhaar_qr_service import process_aadhaar_qr
 from services.kyc.document_verification import verify_document
 from services.kyc.result import DocumentVerification
-from services.ocr_service import extract_text_full, parse_extracted_fields
+from services.ocr_service import (
+    extract_text_full, extract_text_tiles, merge_lines, needs_tile_pass, parse_extracted_fields,
+)
 from utils.image_processing import (
     extract_face_mtcnn,
     save_image,
@@ -57,6 +59,13 @@ async def process_document(
     # ── 3. Field parsing ──────────────────────────────────────────────────────
     doc_type, fields = parse_extracted_fields(lines, full_text)
     logger.info("[%s] Detected document type: %s", session_id, doc_type)
+
+    # Quick pass came up short (phone photos, glare, mixed-script cards) → also read zoomed-in tiles
+    if needs_tile_pass(fields):
+        logger.info("[%s] Name/DOB/ID incomplete after the quick OCR pass — running zoomed tile pass", session_id)
+        lines, full_text = merge_lines(lines, extract_text_tiles(raw_img))
+        doc_type, fields = parse_extracted_fields(lines, full_text)
+        logger.info("[%s] Re-parsed after tile pass: type=%s", session_id, doc_type)
 
     # ── 4. Field validation ───────────────────────────────────────────────────
     validation = FieldValidation(
@@ -112,6 +121,7 @@ async def process_document(
         document_face_extracted=face_img is not None,
         document_face_path=face_path,
         aadhaar_qr=aadhaar_qr,
+        ocr_text=full_text,
         verification=verification.model_dump(mode="json"),
         message=_build_message(confidence, validation, face_img is not None, verification),
     ), verification

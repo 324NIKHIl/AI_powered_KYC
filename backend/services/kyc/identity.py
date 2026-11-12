@@ -52,6 +52,7 @@ def decide_identity(
     *,
     document_status: Optional[str],
     document_risk: float,
+    document_confidence_score: Optional[float] = None,
     face_status: Optional[str],            # MATCH | NO_MATCH | UNCERTAIN | None (could not compare)
     capture_issue: Optional[str],          # human-readable reason the selfie couldn't be used, if any
     liveness: Optional[LivenessResult],
@@ -100,6 +101,27 @@ def decide_identity(
     for p in parts:
         risk *= 1.0 - max(0.0, min(1.0, p))
     risk = round(1.0 - risk, 3)
+
+    # This combined identity rule is shared by every supported document type,
+    # including Aadhaar and passports. Document-specific authenticity checks
+    # remain separate and can still block a suspicious/invalid document.
+    local_checks_passed = (
+        document_confidence_score is not None
+        # The UI presents confidence as a whole-number percentage. Accept values
+        # that round to 100% (for example 0.999), rather than requiring an
+        # internally exact 1.0000 from OCR.
+        and document_confidence_score >= 0.995
+        and face_status == FaceMatch.MATCH
+        and liveness is not None
+        and liveness.status == LivenessStatus.PASS
+    )
+    if local_checks_passed and not suspicious and document_status != "INVALID":
+        return IdentityDecision(
+            KycStatus.VERIFIED,
+            ["Local checks passed: document read confidence is 100%, face matched, and liveness passed. "
+             "Issuer verification may still be unavailable."],
+            risk,
+        )
 
     if suspicious:
         return IdentityDecision(KycStatus.SUSPICIOUS, suspicious + rejected, max(risk, 0.8))
