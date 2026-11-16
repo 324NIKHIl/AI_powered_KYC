@@ -27,36 +27,36 @@ export default function VerificationBreakdown({ verification }) {
   const checks = verification.checks || []
 
   return (
-    <div className="glass-card p-6 space-y-4">
-      <h2 className="font-bold text-lg">{DOC_LABELS[type] || type.replace(/_/g, ' ')}</h2>
+    <div className="glass-card space-y-5 p-5 sm:p-6">
+      <div><p className="text-xs font-semibold uppercase tracking-[.14em] text-slate-500">Document verification</p><h2 className="mt-1 text-lg font-semibold text-slate-900">{DOC_LABELS[type] || type.replace(/_/g, ' ')}</h2></div>
 
       {verification.external?.mock && (
-        <div className="p-3 rounded-xl bg-warning/10 border border-warning/20 text-xs text-warning">
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
           MOCK_VERIFICATION — a development provider was used. This is not a genuine verification.
         </div>
       )}
 
-      <ul className="space-y-2">
+      <ul className="space-y-3">
         {checks.map((c, i) => {
           const o = ICONS[c.outcome] || ICONS.info
           const muted = c.outcome === 'skip' || c.outcome === 'info'
           return (
-            <li key={`${c.id}-${i}`} className="flex items-start gap-3 text-sm">
+            <li key={`${c.id}-${i}`} className="flex items-start gap-3 text-sm leading-5">
               <span className={`${o.cls} w-4 text-center flex-shrink-0`}>{o.icon}</span>
               <div className="min-w-0">
-                <p className={muted ? 'text-white/40' : 'text-white/80'}>{c.label}</p>
-                {c.detail && <p className="text-xs text-white/40 break-words">{c.detail}</p>}
+                <p className={`font-medium ${muted ? 'text-slate-600' : 'text-slate-800'}`}>{c.label}</p>
+                {c.detail && <p className="mt-0.5 text-sm leading-5 text-slate-600 break-words">{c.detail}</p>}
               </div>
             </li>
           )
         })}
       </ul>
 
-      <p className="text-xs text-white/40">{EVIDENCE[verification.evidence_level] || EVIDENCE.none}</p>
-      {verification.summary && <p className="text-sm text-white/60">{verification.summary}</p>}
+      <p className="text-sm leading-5 text-slate-600">{EVIDENCE[verification.evidence_level] || EVIDENCE.none}</p>
+      {verification.summary && <p className="text-sm leading-5 text-slate-700">{verification.summary}</p>}
 
-      <div className="flex items-center justify-between pt-3 border-t border-white/10">
-        <span className="text-xs font-semibold tracking-wider text-white/40">FINAL RESULT</span>
+      <div className="flex items-center justify-between border-t border-slate-200 pt-4">
+        <span className="text-xs font-semibold tracking-wider text-slate-600">FINAL RESULT</span>
         <StatusBadge status={verification.status} />
       </div>
     </div>

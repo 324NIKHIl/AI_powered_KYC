@@ -128,7 +128,7 @@ export default function WebcamCapture({ onCapture, sessionId }) {
         {!capturedImg && ready && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
             <svg width="200" height="260" viewBox="0 0 200 260" className="opacity-30">
-              <ellipse cx="100" cy="120" rx="75" ry="95" fill="none" stroke="#00D4FF" strokeWidth="2" strokeDasharray="8 6" />
+              <ellipse cx="100" cy="120" rx="75" ry="95" fill="none" stroke="#0F766E" strokeWidth="2" strokeDasharray="8 6" />
             </svg>
           </div>
         )}
@@ -143,7 +143,7 @@ export default function WebcamCapture({ onCapture, sessionId }) {
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 1.5 }}
             >
-              <span className="text-8xl font-bold text-primary" style={{ textShadow: '0 0 40px #00D4FF' }}>
+              <span className="text-8xl font-bold text-primary">
                 {countdown}
               </span>
             </motion.div>

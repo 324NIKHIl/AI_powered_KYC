@@ -4,18 +4,18 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Neon-blue KYC brand palette
-        primary:  { DEFAULT: '#00D4FF', dark: '#0099BB', light: '#80EAFF' },
-        accent:   { DEFAULT: '#7C3AED', light: '#A78BFA' },
+        // Calm, accessible identity-product palette
+        primary:  { DEFAULT: '#0F766E', dark: '#115E59', light: '#14B8A6' },
+        accent:   { DEFAULT: '#4F46E5', light: '#818CF8' },
         success:  { DEFAULT: '#10B981', light: '#6EE7B7' },
         danger:   { DEFAULT: '#EF4444', light: '#FCA5A5' },
         warning:  { DEFAULT: '#F59E0B', light: '#FCD34D' },
         surface:  {
-          900: '#0A0E1A',
-          800: '#0F1629',
-          700: '#151D3B',
-          600: '#1E2A4A',
-          500: '#263354',
+          900: '#F8FAFC',
+          800: '#FFFFFF',
+          700: '#F1F5F9',
+          600: '#E2E8F0',
+          500: '#CBD5E1',
         },
       },
       fontFamily: {
@@ -24,9 +24,9 @@ export default {
       },
       backdropBlur: { xs: '2px' },
       boxShadow: {
-        glow:      '0 0 20px rgba(0, 212, 255, 0.3)',
-        'glow-lg': '0 0 40px rgba(0, 212, 255, 0.4)',
-        card:      '0 8px 32px rgba(0, 0, 0, 0.4)',
+        glow:      '0 4px 14px rgba(15, 118, 110, 0.16)',
+        'glow-lg': '0 8px 24px rgba(15, 118, 110, 0.2)',
+        card:      '0 12px 32px rgba(15, 23, 42, 0.07)',
       },
       animation: {
         'pulse-slow':  'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',

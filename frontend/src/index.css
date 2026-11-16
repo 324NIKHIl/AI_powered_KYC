@@ -2,126 +2,80 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── Global base styles ─────────────────────────────────────────────────── */
 @layer base {
   *, *::before, *::after { box-sizing: border-box; }
-
   html { scroll-behavior: smooth; }
-
   body {
-    @apply bg-surface-900 text-white font-sans;
+    @apply bg-surface-900 text-slate-900 font-sans antialiased;
     min-height: 100vh;
-    background-image:
-      radial-gradient(ellipse 80% 80% at 50% -20%, rgba(0,212,255,0.08), transparent),
-      radial-gradient(ellipse 60% 60% at 80% 80%, rgba(124,58,237,0.06), transparent);
+    background-image: radial-gradient(ellipse 70% 45% at 50% -15%, rgba(20,184,166,.08), transparent);
   }
-
-  ::-webkit-scrollbar         { width: 6px; }
-  ::-webkit-scrollbar-track   { @apply bg-surface-800; }
-  ::-webkit-scrollbar-thumb   { @apply bg-surface-500 rounded-full; }
-  ::-webkit-scrollbar-thumb:hover { @apply bg-primary; }
+  ::selection { background: rgba(15,118,110,.18); }
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-track { background: #f1f5f9; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
+  ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 }
 
-/* ── Utility components ─────────────────────────────────────────────────── */
 @layer components {
-  /* Glassmorphism card */
   .glass-card {
-    @apply bg-surface-800/60 backdrop-blur-md border border-white/10 rounded-2xl;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.05);
+    @apply bg-white border border-slate-200 rounded-2xl;
+    box-shadow: 0 12px 32px rgba(15,23,42,.06), 0 1px 2px rgba(15,23,42,.03);
   }
-
-  /* Neon border highlight */
-  .glow-border {
-    @apply border border-primary/40;
-    box-shadow: 0 0 15px rgba(0,212,255,0.15), inset 0 0 15px rgba(0,212,255,0.05);
-  }
-
-  /* Primary CTA button */
+  .glow-border { @apply border-primary/40; box-shadow: 0 0 0 3px rgba(15,118,110,.08); }
   .btn-primary {
-    @apply inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl
-           bg-gradient-to-r from-primary to-primary-dark text-surface-900 font-semibold
-           transition-all duration-200 hover:shadow-glow hover:scale-[1.02]
-           disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100;
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-primary text-white font-semibold
+      shadow-glow transition-all duration-200 hover:bg-primary-dark hover:shadow-glow-lg
+      focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/20
+      disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100;
   }
-
-  /* Secondary outlined button */
   .btn-secondary {
-    @apply inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl
-           border border-primary/40 text-primary font-semibold
-           transition-all duration-200 hover:bg-primary/10 hover:border-primary
-           disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl border border-slate-300 bg-white text-slate-700 font-semibold
+      transition-all duration-200 hover:bg-slate-50 hover:border-slate-400
+      focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/15
+      disabled:opacity-50 disabled:cursor-not-allowed;
   }
-
-  /* Status badge */
-  .badge-approved { @apply px-3 py-1 rounded-full text-xs font-bold bg-success/20 text-success border border-success/30; }
-  .badge-rejected { @apply px-3 py-1 rounded-full text-xs font-bold bg-danger/20  text-danger  border border-danger/30;  }
-  .badge-pending  { @apply px-3 py-1 rounded-full text-xs font-bold bg-warning/20 text-warning  border border-warning/30; }
-
-  /* Input field */
+  .badge-approved { @apply px-3 py-1 rounded-full text-xs font-bold bg-success/10 text-emerald-700 border border-success/20; }
+  .badge-rejected { @apply px-3 py-1 rounded-full text-xs font-bold bg-danger/10 text-red-700 border border-danger/20; }
+  .badge-pending { @apply px-3 py-1 rounded-full text-xs font-bold bg-warning/10 text-amber-700 border border-warning/20; }
   .input-field {
-    @apply w-full px-4 py-3 rounded-xl bg-surface-700 border border-white/10 text-white
-           placeholder-white/30 focus:outline-none focus:border-primary/60 focus:ring-1
-           focus:ring-primary/30 transition-all duration-200;
+    @apply w-full px-4 py-3 rounded-xl bg-white border border-slate-300 text-slate-900 placeholder-slate-400
+      focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/10 transition-all duration-200;
   }
-
-  /* Section heading */
-  .section-title {
-    @apply text-2xl font-bold text-white;
-  }
-
-  /* Gradient text */
-  .gradient-text {
-    @apply bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent;
-  }
+  .section-title { @apply text-2xl font-bold text-slate-900; }
+  .gradient-text { @apply bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent; }
 }
 
-/* ── Custom animations ──────────────────────────────────────────────────── */
-@keyframes shimmer {
-  0%   { background-position: -200% 0; }
-  100% { background-position:  200% 0; }
-}
+/* Legacy component classes are mapped to the new light theme while pages are
+   migrated incrementally. */
+[class~="text-white"] { color: #0f172a; }
+[class~="text-white/85"] { color: #1e293b; }
+[class~="text-white/80"] { color: #334155; }
+[class~="text-white/70"] { color: #334155; }
+[class~="text-white/60"] { color: #334155; }
+[class~="text-white/50"] { color: #475569; }
+[class~="text-white/40"] { color: #475569; }
+[class~="text-white/35"] { color: #64748b; }
+[class~="text-white/30"] { color: #64748b; }
+[class~="text-white/20"] { color: #64748b; }
+[class~="border-white/20"] { border-color: #cbd5e1; }
+[class~="border-white/10"] { border-color: #e2e8f0; }
+[class~="border-white/5"] { border-color: #f1f5f9; }
+[class~="divide-white/5"] > :not([hidden]) ~ :not([hidden]) { border-color: #f1f5f9; }
+[class~="bg-white/10"] { background-color: #f1f5f9; }
+[class~="placeholder-white/30"]::placeholder,
+[class~="placeholder-white/25"]::placeholder { color: #94a3b8; }
 
-.shimmer {
-  background: linear-gradient(90deg, transparent 0%, rgba(0,212,255,0.08) 50%, transparent 100%);
-  background-size: 200% 100%;
-  animation: shimmer 2s infinite;
-}
+.shimmer { background: linear-gradient(90deg, transparent 0%, rgba(15,118,110,.08) 50%, transparent 100%); background-size: 200% 100%; animation: shimmer 2s infinite; }
+@keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
 
-@keyframes scanline {
-  0%   { transform: translateY(-100%); }
-  100% { transform: translateY(100vh); }
-}
+/* The previous decorative scanline looked like a loading artifact; keep the
+   class harmless for any mounted layout while removing its visible effect. */
+.scanline { display: none; }
+.webcam-container { position: relative; overflow: hidden; border-radius: 1rem; }
+.webcam-container::before { content: ''; position: absolute; inset: 0; border: 2px solid rgba(15,118,110,.45); border-radius: 1rem; pointer-events: none; z-index: 10; }
+.drop-zone-active { @apply border-primary bg-primary/5; box-shadow: 0 0 0 4px rgba(15,118,110,.08); }
 
-.scanline {
-  position: fixed;
-  top: 0; left: 0; right: 0;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, rgba(0,212,255,0.3), transparent);
-  animation: scanline 8s linear infinite;
-  pointer-events: none;
-  z-index: 9999;
-}
-
-/* ── Webcam container ───────────────────────────────────────────────────── */
-.webcam-container {
-  position: relative;
-  overflow: hidden;
-  border-radius: 1rem;
-}
-
-.webcam-container::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border: 2px solid rgba(0,212,255,0.4);
-  border-radius: 1rem;
-  pointer-events: none;
-  z-index: 10;
-  animation: pulse 2s ease-in-out infinite;
-}
-
-/* ── Drop zone ──────────────────────────────────────────────────────────── */
-.drop-zone-active {
-  @apply border-primary bg-primary/5;
-  box-shadow: 0 0 30px rgba(0,212,255,0.2);
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }

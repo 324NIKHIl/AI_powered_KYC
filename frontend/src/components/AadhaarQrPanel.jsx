@@ -18,6 +18,10 @@ const FIELD_ROWS = [
   { key: 'aadhaar_last4', label: 'Aadhaar', format: (v) => `XXXX XXXX ${v}` },
 ]
 
+function QrLockIcon() {
+  return <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5 text-primary" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="10" width="14" height="10" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 4v2" /></svg>
+}
+
 /**
  * Aadhaar Secure QR verification status.
  * - `onUpload` (optional): shows an upload box when no QR has been decoded yet.
@@ -56,8 +60,8 @@ export default function AadhaarQrPanel({
     <div className="glass-card p-6 space-y-4">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h3 className="font-bold text-lg flex items-center gap-2"><span>🔐</span> Aadhaar Secure QR</h3>
-          <p className="text-white/40 text-xs mt-1">
+          <h3 className="flex items-center gap-2 text-lg font-semibold text-slate-900"><QrLockIcon /> Aadhaar Secure QR</h3>
+          <p className="mt-1 text-sm leading-5 text-slate-600">
             Checks UIDAI's digital signature and compares the signed details and photo with the printed card
           </p>
         </div>
@@ -119,7 +123,7 @@ export default function AadhaarQrPanel({
           </p>
           <DocumentUpload onFileSelected={setFile} uploading={uploading} uploadProgress={0} />
           <button onClick={handleUpload} disabled={!file || uploading} className="btn-secondary w-full">
-            {uploading ? 'Reading QR code…' : '🔍 Verify Aadhaar QR'}
+            {uploading ? 'Reading QR code…' : 'Verify Aadhaar QR'}
           </button>
           {uploadError && <p className="text-danger text-sm">⚠ {uploadError}</p>}
         </div>
