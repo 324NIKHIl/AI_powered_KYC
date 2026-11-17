@@ -118,7 +118,8 @@ def evaluate(steps: Sequence[str], yaws: Sequence[Optional[float]], frames_disti
         delta = y - base
         # The submitted webcam frames produce a positive yaw delta for the prompted
         # left turn and a negative delta for the prompted right turn.
-        ok = delta >= need if step == "left" else delta <= -need
+        #ok = delta >= need if step == "left" else delta <= -need
+        ok = delta >= need if step == "right" else delta <= -need
         if not ok:
             reasons.append(f"head did not turn {step} as asked (change {delta:+.2f}, needed {need:.2f})")
     if reasons:

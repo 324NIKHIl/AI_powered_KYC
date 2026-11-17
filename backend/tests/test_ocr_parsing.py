@@ -46,3 +46,12 @@ def test_tile_pass_decision_and_merge():
     assert not needs_tile_pass(ExtractedFields(name="Kirtan Shrestha", dob="2005", id_number="793307085498"))
     merged, text = merge_lines(["Government of India", "MALE"], ["government of india", "Kirtan Shrestha"])
     assert merged == ["Government of India", "MALE", "Kirtan Shrestha"] and "Kirtan" in text
+
+
+def test_pan_parser_does_not_join_separate_ocr_lines():
+    assert _parse_id_number(["ABCDE", "1234F"], DocumentType.PAN) is None
+
+
+def test_pan_parser_accepts_number_within_one_ocr_line():
+    assert _parse_id_number(["Permanent Account Number: ABCPK 1234F"], DocumentType.PAN) == "ABCPK1234F"
+    assert _parse_id_number(["ABCPK.1234F"], DocumentType.PAN) == "ABCPK1234F"
