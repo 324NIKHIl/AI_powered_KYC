@@ -322,12 +322,12 @@ Face match        MATCH (>= FACE_SIMILARITY_THRESHOLD, default 0.32)
                   UNCERTAIN (between FACE_NO_MATCH_THRESHOLD 0.22 and the match threshold)
                   NO_MATCH (< FACE_NO_MATCH_THRESHOLD)
 Liveness          PASS | UNCERTAIN | FAIL          (server-side; the browser can only tighten it)
-Face alteration   LOW | REVIEW | HIGH              (heuristic)
+Face alteration   LOW | REVIEW | HIGH              (heuristic risk; classifier score is informational until calibrated)
 
 Final KYC status, most severe first:
-  SUSPICIOUS               document SUSPICIOUS, QR/printed-photo mismatch, liveness FAIL, or HIGH alteration risk
+  SUSPICIOUS               document SUSPICIOUS, QR/printed-photo mismatch, or liveness FAIL
   REJECTED                 document INVALID, or face NO_MATCH
-  MANUAL_REVIEW_REQUIRED   capture unusable (retake), UNCERTAIN face/liveness, REVIEW alteration, document needs a human
+  MANUAL_REVIEW_REQUIRED   capture unusable (retake), UNCERTAIN face/liveness, any alteration signal, document needs a human
   VERIFICATION_UNAVAILABLE document needs an authoritative source/key that was unavailable
   VERIFIED                 OCR read confidence rounds to 100% + face MATCH + liveness PASS, unless a document is INVALID/SUSPICIOUS or other suspicious signal exists
 ```
@@ -379,7 +379,7 @@ Old pre-2019 cards carry an unsigned XML QR, which is decoded and cross-checked 
 
 ## Phase 2 Roadmap (Future)
 
-- Trained deepfake / presentation-attack models (the current analysis is heuristic)
+- Certified presentation-attack and deepfake models validated on target cameras and populations
 - Behavioral biometrics
 - Graph-based fraud detection
 - Risk scoring engine
@@ -480,12 +480,22 @@ The generic adapter has only been tested with simulated responses, not against a
 **Liveness** (`liveness.py`, server-side) is passive signal processing on the live frame and an optional burst of
 extra frames: periodic screen/moire patterns (FFT peak prominence), specular glare, flat texture, colourless faces
 (black-and-white prints), and identical frames (static image or frozen replay). The browser's challenge result is
-advisory: it can downgrade a PASS to UNCERTAIN but can never override a failure.
+advisory: it can downgrade a PASS to UNCERTAIN but can never override a failure. Each server-issued head-turn
+challenge asks for a baseline, then one left and one right turn in randomized order. Each turn must reach at least
+`0.12` normalized yaw change in the requested direction (left is negative and right is positive in captured image
+coordinates; configurable with `LIVENESS_MIN_TURN_RATIO`); a larger
+turn also passes, so the value is a minimum, not an exact target. This is still a heuristic check, not certified PAD.
 
-**Face-alteration / deepfake analysis** (`deepfake.py`) looks **only at the live camera frame** (using the face
-box found by MTCNN). It does **not** inspect the photo printed on the document; a swapped document photo is covered
+**Face-alteration / deepfake analysis** (`deepfake.py`) runs after liveness on **only the live camera frame** (using the face
+box found by MTCNN). It combines four local image-forensics signals with a pretrained ONNX ViT image classifier
+(`ChrisBeischl/LoRA-deepfake-detection`, quantized model). The classifier weights are downloaded from Hugging Face
+on first use and cached locally; `onnxruntime` and `huggingface_hub` are installed with `backend/requirements.txt`.
+Set `DEEPFAKE_MODEL_REPO` and `DEEPFAKE_MODEL_FILE` to override the model source. If model loading or inference fails,
+the result reports that only heuristic analysis was available. The classifier's raw score is recorded for evaluation,
+but is not used by itself to raise the LOW/REVIEW/HIGH level or mark a verification suspicious until calibrated on
+representative webcam samples. It does **not** inspect the photo printed on the document; a swapped document photo is covered
 by the document tamper heuristics and, for Aadhaar, by comparing the printed photo with the photo inside the signed
-QR. The four signals, each scored 0-1 and combined as `risk = 1 - prod(1 - weight x signal)`:
+QR. The local heuristic component uses four signals, each scored 0-1 and combined as `risk = 1 - prod(1 - weight x signal)`:
 
 | Signal | Weight | Idea |
 |---|---|---|
@@ -494,11 +504,15 @@ QR. The four signals, each scored 0-1 and combined as `risk = 1 - prod(1 - weigh
 | recompression mismatch | 0.5 | JPEG error level of the face vs the whole frame (spliced content) |
 | spectral anomaly | 0.5 | high- vs mid-frequency FFT energy of the face (generator up-sampling) |
 
-Result: `LOW`, `REVIEW` (manual review) or `HIGH` (`SUSPICIOUS`), thresholds `DEEPFAKE_REVIEW_THRESHOLD` and
-`DEEPFAKE_HIGH_RISK_THRESHOLD`. **This is not a trained deepfake classifier**: a good face swap or AI-generated
-face can pass, defaults are uncalibrated, and LOW means "nothing suspicious found", not "face is real". The real
-defence against a different person is the face match. For production, put a certified liveness / deepfake model
-behind `assess_liveness` and `assess_face_alteration` (same return types, nothing else changes).
+The heuristic component produces `LOW`, `REVIEW` or `HIGH` using thresholds
+`DEEPFAKE_REVIEW_THRESHOLD` and `DEEPFAKE_HIGH_RISK_THRESHOLD`. Any `REVIEW` or `HIGH` alteration signal, including
+an elevated classifier score, routes the overall result to `MANUAL_REVIEW_REQUIRED`; it does not by itself mark the
+person or capture `SUSPICIOUS`. The classifier score remains informational until calibrated.
+The selected model card describes training on real Flickr portraits and StyleGAN2
+generated faces, so it may miss newer generators, face swaps, or other manipulation methods; its reported test
+metrics are from that model's dataset, not this project. It is a review signal, not proof of fraud or authenticity.
+Validate and calibrate it on representative camera captures before relying on automated decisions. The face match
+remains a separate check against the document photo.
 
 **Document tamper analysis** (`tampering.py`) checks editing-software metadata, JPEG error-level inconsistencies and
 regional noise differences. It can raise suspicion; a clean result never proves authenticity.
@@ -506,7 +520,9 @@ regional noise differences. It can raise suspicion; a clean result never proves 
 ### Other environment variables
 
 `FACE_NO_MATCH_THRESHOLD`, `LIVENESS_ATTACK_THRESHOLD`, `LIVENESS_UNCERTAIN_THRESHOLD`,
-`DEEPFAKE_HIGH_RISK_THRESHOLD`, `DEEPFAKE_REVIEW_THRESHOLD`, `TAMPER_SUSPICIOUS_THRESHOLD`,
+`LIVENESS_MIN_TURN_RATIO`,
+`DEEPFAKE_HIGH_RISK_THRESHOLD`, `DEEPFAKE_REVIEW_THRESHOLD`, `DEEPFAKE_MODEL_REPO`, `DEEPFAKE_MODEL_FILE`,
+`TAMPER_SUSPICIOUS_THRESHOLD`,
 `OCR_LANGUAGES` (use `en,ne` to read Devanagari, e.g. Nepal citizenship), `MAX_FILE_SIZE_MB`. All are listed in
 `backend/.env.example`.
 
@@ -521,7 +537,7 @@ images and faces: it is git-ignored, but files committed earlier stay tracked un
 
 ### Limitations
 
-- Liveness and deepfake analysis are heuristics (see above); weak against printed photos and high-quality fakes.
+- Liveness is heuristic, and the deepfake model is a research classifier (see above); neither is a certified detector.
 - No vendor adapter is bundled; the generic REST adapter needs a real contract (or a small subclass).
 - Passports: TD3 MRZ only. Driving licences: India-structured numbers. Nepal Bikram Sambat dates are checked for
   plausibility, not converted.

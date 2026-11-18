@@ -42,10 +42,12 @@ class DeepfakeResult:
     def to_dict(self) -> dict:
         result = {"risk": round(self.risk, 3), "level": self.level,
                   "signals": {k: round(v, 3) for k, v in self.signals.items()},
-                  "reasons": self.reasons,
-                  "method": self.method,
-                  "requires_manual_review": self.level in ("REVIEW", "HIGH")
-                }
+                  "reasons": self.reasons, "method": self.method,
+                  "requires_manual_review": (
+                      self.level in ("REVIEW", "HIGH")
+                      or (self.model_fake_probability is not None
+                          and self.model_fake_probability >= deepfake_review_threshold())
+                  )}
         if self.model_fake_probability is not None:
             result["model_fake_probability"] = round(self.model_fake_probability, 3)
             result["model_score_calibrated"] = False

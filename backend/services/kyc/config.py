@@ -143,7 +143,7 @@ def liveness_require_challenge() -> bool:
 
 
 def liveness_min_turn_ratio() -> float:
-    """Minimum change in the nose-offset/eye-distance ratio (vs. the straight-ahead frame) for a head turn."""
+    """Minimum normalized yaw change required in the prompted direction."""
     return _float("LIVENESS_MIN_TURN_RATIO", 0.12)
 
 
