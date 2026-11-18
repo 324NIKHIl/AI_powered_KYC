@@ -118,7 +118,7 @@ export async function verifyFace(sessionId, liveFrameBase64, livenessVerified = 
 }
 
 /**
- * Ask the server for a random, single-use head-turn challenge.
+ * Ask the server for a randomized single-use left/right liveness challenge.
  * Resolves to { challenge_id, steps: [{ id: 'center'|'left'|'right', prompt }], expires_in }.
  */
 export async function getLivenessChallenge(sessionId) {

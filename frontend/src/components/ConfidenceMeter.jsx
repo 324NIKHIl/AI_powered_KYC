@@ -7,7 +7,7 @@ import { motion } from 'framer-motion'
 export default function ConfidenceMeter({ score = 0, label = 'Confidence', size = 160 }) {
   const pct   = Math.max(0, Math.min(1, score))
   const deg   = pct * 270  // arc spans 270 degrees (-135 to +135)
-  const color = pct >= 0.75 ? '#10B981' : pct >= 0.50 ? '#F59E0B' : '#EF4444'
+  const color = pct >= 0.75 ? '#059669' : pct >= 0.50 ? '#D97706' : '#DC2626'
   const r     = (size / 2) - 12
   const cx    = size / 2
   const cy    = size / 2
@@ -23,7 +23,7 @@ export default function ConfidenceMeter({ score = 0, label = 'Confidence', size 
           <circle
             cx={cx} cy={cy} r={r}
             fill="none"
-            stroke="rgba(255,255,255,0.05)"
+            stroke="#E2E8F0"
             strokeWidth={10}
             strokeDasharray={`${arcLength} ${circumference - arcLength}`}
             strokeLinecap="round"
@@ -39,7 +39,7 @@ export default function ConfidenceMeter({ score = 0, label = 'Confidence', size 
             initial={{ strokeDashoffset: arcLength }}
             animate={{ strokeDashoffset: dashOffset }}
             transition={{ duration: 1.2, ease: 'easeOut' }}
-            style={{ filter: `drop-shadow(0 0 6px ${color})` }}
+            style={{ filter: 'none' }}
           />
         </svg>
 
@@ -54,7 +54,7 @@ export default function ConfidenceMeter({ score = 0, label = 'Confidence', size 
           >
             {Math.round(pct * 100)}%
           </motion.span>
-          <span className="text-xs text-white/40 mt-0.5">{label}</span>
+          <span className="mt-0.5 max-w-[8rem] text-center text-[11px] font-medium leading-4 text-slate-600">{label}</span>
         </div>
       </div>
     </div>

@@ -27,6 +27,26 @@ def test_valid_uploads_identified_by_content():
     assert validate_upload(b"%PDF-1.7 ...", "application/pdf").safe_filename == "upload.pdf"
 
 
+def test_public_document_verification_hides_diagnostic_details():
+    from api.routes.document import _public_document_verification
+
+    verification = {
+        "document_type": "PAN",
+        "status": "INVALID",
+        "extracted": {"id_number": "XXXX1234"},
+        "checks": [{"id": "layout", "label": "Layout check", "outcome": "fail"}],
+        "evidence_level": "document_analysis",
+        "reasons": ["layout mismatch"],
+        "risk_score": 0.9,
+    }
+
+    assert _public_document_verification(verification) == {
+        "document_type": "PAN",
+        "status": "INVALID",
+        "extracted": {"id_number": "XXXX1234"},
+    }
+
+
 @pytest.mark.parametrize("payload,code", [
     (b"", 422),
     (b"<?php system($_GET['c']); ?>", 415),
