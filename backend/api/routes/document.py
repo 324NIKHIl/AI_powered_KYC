@@ -36,6 +36,17 @@ def _mask_fields(fields: dict) -> dict:
     return masked
 
 
+def _public_document_verification(verification: dict | None) -> dict | None:
+    """Keep only user-facing fields; detailed checks remain in the server-side audit record."""
+    if verification is None:
+        return None
+    return {
+        key: verification[key]
+        for key in ("document_type", "status", "extracted")
+        if key in verification
+    }
+
+
 @router.post(
     "/upload-document",
     response_model=DocumentUploadResponse,
@@ -133,6 +144,8 @@ async def upload_document(
         result.document_confidence_score,
         result.document_face_extracted,
     )
+    result.verification = _public_document_verification(result.verification)
+    result.message = "Document received and processed."
     return result
 
 
@@ -192,7 +205,10 @@ async def upload_aadhaar_qr(
         await update_session(sid, session_updates)
         await upsert_verification_fields(sid, record_updates)
     logger.info("[%s] Aadhaar QR upload complete found=%s signature=%s", sid, result.found, result.signature_status)
-    return AadhaarQrUploadResponse(**result.model_dump(), verification=verification_dump)
+    return AadhaarQrUploadResponse(
+        **result.model_dump(),
+        verification=_public_document_verification(verification_dump),
+    )
 
 
 @router.get(
@@ -205,4 +221,6 @@ async def get_document_result(session_id: str):
     record = await col.find_one({"session_id": session_id}, {"_id": 0, "verification_provider": 0})
     if not record:
         raise HTTPException(status_code=404, detail="Session not found")
+    if "document_verification" in record:
+        record["document_verification"] = _public_document_verification(record["document_verification"])
     return record

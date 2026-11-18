@@ -21,9 +21,23 @@ const ICONS = {
   info: { icon: 'ℹ', cls: 'text-white/40' },
 }
 
-export default function VerificationBreakdown({ verification }) {
+export default function VerificationBreakdown({ verification, publicView = false }) {
   if (!verification) return null
   const type = String(verification.document_type || 'UNKNOWN').toUpperCase()
+  if (publicView) {
+    return (
+      <div className="glass-card flex items-center justify-between gap-4 p-5 sm:p-6">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[.14em] text-slate-500">Document verification</p>
+          <h2 className="mt-1 text-lg font-semibold text-slate-900">{DOC_LABELS[type] || type.replace(/_/g, ' ')}</h2>
+        </div>
+        <div className="flex flex-col items-end gap-2">
+          <span className="text-xs font-semibold tracking-wider text-slate-600">FINAL RESULT</span>
+          <StatusBadge status={verification.status} />
+        </div>
+      </div>
+    )
+  }
   const checks = verification.checks || []
 
   return (

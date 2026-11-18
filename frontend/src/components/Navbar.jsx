@@ -26,8 +26,8 @@ export default function Navbar() {
             <path d="M5 7h9.3l9.4 22L33 7h9.4L27 41h-7.1L5 7Z" fill="url(#veriqo-mark)" />
             <path d="M11 34C16 19 28 8.5 37 10.5c7.6 1.7 5.5 9.2-1.2 15.8-6.2 6.1-17.5 12.4-23.2 10.2-2.7-1-3.2-3.5-1.6-7" fill="none" stroke="url(#veriqo-mark)" strokeWidth="2.2" strokeLinecap="round" />
           </svg>
-          <span className="text-[1.25rem] font-extrabold tracking-[-.055em] text-slate-900">
-            VER<span className="text-sky-500">I</span><span className="bg-gradient-to-r from-sky-500 to-violet-600 bg-clip-text text-transparent">QO</span>
+          <span className="text-[1.25rem] font-extrabold tracking-[-.055em] text-brand-navy">
+            VER<span className="text-brand-teal">IQO</span>
           </span>
         </Link>
 

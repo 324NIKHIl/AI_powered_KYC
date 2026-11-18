@@ -269,7 +269,7 @@ export default function VerificationPage() {
               </div>
             </div>
 
-            <VerificationBreakdown verification={state.documentResult.verification} />
+            <VerificationBreakdown verification={state.documentResult.verification} publicView />
 
             {/* Aadhaar back side / QR — shown before "Next" so it isn't missed.
                 Also offered for unknown documents in case type detection missed an Aadhaar. */}

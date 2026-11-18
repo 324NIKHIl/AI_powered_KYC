@@ -43,7 +43,7 @@ export default function WebcamCapture({ onCapture, sessionId }) {
       for (let i = 0; i < challenge.steps.length; i++) {
         setStepIdx(i)
         // Time to read the prompt and move the head, then hold still for the frame.
-        for (let c = 3; c >= 1; c--) {
+        for (let c = 5; c >= 1; c--) {
           setCountdown(c)
           await sleep(900)
         }
@@ -107,6 +107,28 @@ export default function WebcamCapture({ onCapture, sessionId }) {
         </div>
       )}
 
+      {/* Current prompt */}
+      {!capturedImg && current && (
+        <motion.div
+          key={stepIdx}
+          role="status"
+          aria-live="assertive"
+          aria-atomic="true"
+          initial={{ opacity: 0, y: -12, scale: 0.96 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={{ type: 'spring', stiffness: 420, damping: 24 }}
+          className="glass-card border-2 border-primary p-4 flex items-center gap-3 shadow-lg"
+        >
+          <span className="text-3xl">{ICONS[current.id]}</span>
+          <div>
+            <p className="text-xs font-bold text-primary uppercase tracking-wider">
+              New instruction — step {stepIdx + 1} of {steps.length}
+            </p>
+            <p className="text-base font-semibold text-white">{current.prompt}</p>
+          </div>
+        </motion.div>
+      )}
+
       {/* Webcam / captured frame */}
       <div className="webcam-container aspect-video bg-surface-800 rounded-2xl overflow-hidden">
         {capturedImg ? (
@@ -151,27 +173,9 @@ export default function WebcamCapture({ onCapture, sessionId }) {
         </AnimatePresence>
       </div>
 
-      {/* Current prompt */}
-      {!capturedImg && current && (
-        <motion.div
-          key={stepIdx}
-          initial={{ opacity: 0, y: 5 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="glass-card p-3 flex items-center gap-3"
-        >
-          <span className="text-2xl">{ICONS[current.id]}</span>
-          <div>
-            <p className="text-xs text-white/40 uppercase tracking-wider">
-              Liveness check — step {stepIdx + 1} of {steps.length}
-            </p>
-            <p className="text-sm font-medium text-white">{current.prompt}</p>
-          </div>
-        </motion.div>
-      )}
-
       {!capturedImg && !running && ready && (
         <p className="text-xs text-white/40">
-          Look straight at the camera, then slowly turn toward each direction shown. A turn beyond the minimum still passes.
+          Look straight at the camera, then turn your head clearly toward each direction shown (not just your eyes). Hold still until the countdown ends so the frame can be captured.
         </p>
       )}
 
